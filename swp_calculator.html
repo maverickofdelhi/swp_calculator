@@ -106,24 +106,29 @@
 
   .clear-btn {
     position: absolute;
-    right: 10px;
+    right: 8px;
     top: 50%;
-    transform: translateY(-2px);
+    transform: translateY(-50%);
     background: #e4e4df;
     color: #6c6c6c;
     border: none;
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
+    font-size: 16px;
     cursor: pointer;
     z-index: 5;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s, background 0.2s;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .clear-btn:active {
+    background: #d4d4cf;
   }
 
   .field:hover .clear-btn, .field input:focus + .clear-btn, .clear-btn.visible {
@@ -169,6 +174,8 @@
     border-radius: 12px;
     background: var(--surface);
     box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
   }
 
   .search-suggestions.hidden {
@@ -540,7 +547,8 @@
         <input type="number" id="schemeCode" placeholder="e.g. 100033" min="1" inputmode="numeric">
       </div>
     </div>
-    <div id="apiFundMeta">Select AMC first, then pick a Direct/Regular Growth fund. History loads automatically.</div>
+    <div id="apiFundMeta" style="font-size: 0.74rem; color: var(--muted); margin-top: 10px;">Select AMC first, then pick a Direct/Regular Growth fund. History loads automatically.</div>
+    <div id="dataRangeInfo" class="hidden" style="font-size: 0.72rem; margin-top: 4px; color: var(--muted); font-weight: 500;"></div>
 
     <div id="navLiveStatus" class="status-msg info">Choose a fund to auto-load live history.</div>
   </div>
@@ -624,6 +632,28 @@ function hideFundSuggestions() {
   hideSuggestions('fundSuggestions');
 }
 
+function attachReliableTap(suggestions, callback) {
+  const items = suggestions.querySelectorAll('.suggestion-item');
+  items.forEach(item => {
+    let startX, startY;
+    item.addEventListener('pointerdown', (e) => {
+      startX = e.clientX;
+      startY = e.clientY;
+    });
+    
+    item.addEventListener('pointerup', (e) => {
+      const diffX = Math.abs(e.clientX - startX);
+      const diffY = Math.abs(e.clientY - startY);
+      // If moved more than 10px, it's likely a scroll, so don't select.
+      if (diffX > 10 || diffY > 10) return;
+      
+      const index = parseInt(item.dataset.index);
+      callback(index);
+      suggestions.classList.add('hidden');
+    });
+  });
+}
+
 function renderAmcSuggestions(results) {
   const box = document.getElementById('amcSuggestions');
   lastAmcSuggestions = Array.isArray(results) ? results : [];
@@ -638,6 +668,7 @@ function renderAmcSuggestions(results) {
     .map((amc, index) => `<button type="button" class="suggestion-item" data-index="${index}">${String(amc.amcName).replace(/"/g, '&quot;')} (${amc.fundCount} funds)</button>`)
     .join('');
   box.classList.remove('hidden');
+  attachReliableTap(box, selectAmcSuggestionByIndex);
 }
 
 function clearFundSelectionForAmc() {
@@ -676,6 +707,7 @@ function renderFundSuggestions(results) {
     .map((fund, index) => `<button type="button" class="suggestion-item" data-index="${index}">${String(fund.display).replace(/"/g, '&quot;')}</button>`)
     .join('');
   box.classList.remove('hidden');
+  attachReliableTap(box, selectFundSuggestionByIndex);
 }
 
 function selectFundSuggestionByIndex(index) {
@@ -1012,6 +1044,7 @@ async function fetchFundSinceInception(isAuto = false) {
 
   const apiMeta = document.getElementById('apiFundMeta');
   const liveStatus = document.getElementById('navLiveStatus');
+  const rangeInfo = document.getElementById('dataRangeInfo');
   const requestedName = schemeLookup.get(code) || (selectedFundMeta && selectedFundMeta.schemeName) || '';
   const loadingMessage = requestedName
     ? `${isAuto ? 'Auto-fetching' : 'Fetching'} live fund data for ${requestedName} (Code: ${code})...`
@@ -1021,6 +1054,7 @@ async function fetchFundSinceInception(isAuto = false) {
   apiMeta.textContent = loadingMessage;
   liveStatus.textContent = loadingMessage;
   document.getElementById('errorMsg').classList.add('hidden');
+  rangeInfo.classList.add('hidden');
 
   try {
     const backendUrl = apiUrl(`/api/funds/${code}/history`);
@@ -1036,9 +1070,7 @@ async function fetchFundSinceInception(isAuto = false) {
     }
 
     if (!rows.length) {
-      showError('No historical data returned for this scheme code.');
-      apiMeta.textContent = 'No data found for this scheme code.';
-      return;
+      throw new Error('No historical data returned for this scheme code.');
     }
 
     const rebuilt = {};
@@ -1065,9 +1097,11 @@ async function fetchFundSinceInception(isAuto = false) {
     lastFetchedSchemeCode = code;
 
     const latestAvailable = allDates[allDates.length - 1];
+    const inception = allDates[0];
+    rangeInfo.textContent = `Data available from ${inception} to ${latestAvailable}`;
+    rangeInfo.classList.remove('hidden');
 
     // Set dates to fund-valid defaults if current dates are outside range.
-    const inception = allDates[0];
     const firstInvestDate = document.getElementById('investmentDate').value;
     const firstSWPDate = document.getElementById('swpStartDate').value;
     if (!firstInvestDate || swpCompareDates(firstInvestDate, inception) < 0) {
@@ -1095,13 +1129,14 @@ async function fetchFundSinceInception(isAuto = false) {
       apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Source: ${sourceTag} (${cacheTag})`;
       liveStatus.textContent = `${selectedFundMeta.schemeName} loaded with ${allDates.length} live NAV points (${sourceTag}, ${cacheTag}).`;
     }
-  } catch (_) {
-    showError('Could not load live fund data. Check the scheme code, network, and try again.');
+  } catch (err) {
+    console.error('Fetch error:', err);
     const failureMessage = requestedName
       ? `Live data fetch failed for ${requestedName} (Code: ${code}). Retry or choose another fund.`
       : `Live data fetch failed for Code: ${code}. Retry or choose another fund.`;
     apiMeta.textContent = failureMessage;
     liveStatus.textContent = failureMessage;
+    rangeInfo.classList.add('hidden');
   }
 }
 
@@ -1696,13 +1731,10 @@ document.getElementById('amcSuggestions').addEventListener('click', (event) => {
     selectAmcSuggestionByIndex(index);
   }
 });
-document.getElementById('amcSuggestions').addEventListener('mousedown', (event) => {
-  const btn = event.target.closest('button[data-index]');
-  if (!btn) return;
-  event.preventDefault();
-  const index = Number(btn.dataset.index);
-  if (Number.isInteger(index)) {
-    selectAmcSuggestionByIndex(index);
+document.getElementById('amcSuggestions').addEventListener('pointerdown', (event) => {
+  // Prevent blur on input but allow scrolling
+  if (event.target.classList.contains('suggestion-item')) {
+     // If it's a click, pointerup will handle it
   }
 });
 document.getElementById('amcSearchApi').addEventListener('keydown', (event) => {
@@ -1737,14 +1769,9 @@ document.getElementById('fundSuggestions').addEventListener('click', (event) => 
     selectFundSuggestionByIndex(index);
   }
 });
-document.getElementById('fundSuggestions').addEventListener('mousedown', (event) => {
-  const btn = event.target.closest('button[data-index]');
-  if (!btn) return;
+document.getElementById('fundSuggestions').addEventListener('pointerdown', (event) => {
+  // Prevent blur on input
   event.preventDefault();
-  const index = Number(btn.dataset.index);
-  if (Number.isInteger(index)) {
-    selectFundSuggestionByIndex(index);
-  }
 });
 document.getElementById('fundSearchApi').addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;

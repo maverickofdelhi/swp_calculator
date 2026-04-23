@@ -520,11 +520,51 @@ function requestJson(url, timeoutMs) {
   });
 }
 
+let liveSchemeCodesCache = null;
+let liveSchemeCodesTimestamp = 0;
+
+async function getLiveSchemeCodes() {
+  const now = Date.now();
+  if (liveSchemeCodesCache && (now - liveSchemeCodesTimestamp < 24 * 60 * 60 * 1000)) {
+    return liveSchemeCodesCache;
+  }
+
+  const data = await new Promise((resolve, reject) => {
+    https.get('https://portal.amfiindia.com/spages/NAVAll.txt', (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => resolve(body));
+    }).on('error', reject);
+  });
+
+  const codes = new Set();
+  const lines = data.split('\n');
+  for (const line of lines) {
+    const parts = line.split(';');
+    if (parts.length >= 6) {
+      const code = parts[0].trim();
+      if (/^\d+$/.test(code)) {
+        codes.add(code);
+      }
+    }
+  }
+
+  liveSchemeCodesCache = codes;
+  liveSchemeCodesTimestamp = now;
+  return codes;
+}
+
 async function loadFundCatalog() {
   const cached = getFromCache(cache.catalog, 'master', CACHE_TTL_MS.catalog);
   if (cached) return cached;
 
-  const payload = await httpGetJson(`${MFAPI_BASE}/mf`, { retries: 1, timeoutMs: 12000 });
+  const [payload, liveCodes] = await Promise.all([
+    httpGetJson(`${MFAPI_BASE}/mf`, { retries: 1, timeoutMs: 12000 }),
+    getLiveSchemeCodes().catch((err) => {
+      console.warn('Failed to load AMFI live codes:', err.message);
+      return new Set();
+    })
+  ]);
   const rows = Array.isArray(payload) ? payload : [];
 
   const filtered = rows
@@ -532,13 +572,16 @@ async function loadFundCatalog() {
       const schemeCode = String(row.schemeCode || '').trim();
       const schemeName = String(row.schemeName || '').trim();
       if (!schemeCode || !schemeName) return null;
+      if (liveCodes.size > 0 && !liveCodes.has(schemeCode)) return null;
       if (!isGrowthPlanName(schemeName) || !isRegularOrDirectPlanName(schemeName)) return null;
 
       const amcName = detectAMCName(schemeName);
+      const simpleName = simplifySchemeName(schemeName, amcName);
       const searchText = `${amcName} ${schemeName}`.toLowerCase();
       return {
         schemeCode,
-        schemeName,
+        schemeName: simpleName,
+        fullName: schemeName,
         amcName,
         planType: /\bdirect\b/i.test(schemeName) ? 'Direct' : 'Regular',
         optionType: 'Growth',
@@ -570,7 +613,13 @@ async function loadFundsFromLiveSearch(query) {
   const q = String(query || '').trim();
   if (!q) return [];
 
-  const payload = await httpGetJson(`${MFAPI_BASE}/mf/search?q=${encodeURIComponent(q)}`, { retries: 1, timeoutMs: 10000 });
+  const [payload, liveCodes] = await Promise.all([
+    httpGetJson(`${MFAPI_BASE}/mf/search?q=${encodeURIComponent(q)}`, { retries: 1, timeoutMs: 10000 }),
+    getLiveSchemeCodes().catch((err) => {
+      console.warn('Failed to load AMFI live codes:', err.message);
+      return new Set();
+    })
+  ]);
   const rows = Array.isArray(payload) ? payload : [];
 
   return rows
@@ -578,12 +627,15 @@ async function loadFundsFromLiveSearch(query) {
       const schemeCode = String(row.schemeCode || '').trim();
       const schemeName = String(row.schemeName || '').trim();
       if (!schemeCode || !schemeName) return null;
+      if (liveCodes.size > 0 && !liveCodes.has(schemeCode)) return null;
       if (!isGrowthPlanName(schemeName) || !isRegularOrDirectPlanName(schemeName)) return null;
 
       const amcName = detectAMCName(schemeName);
+      const simpleName = simplifySchemeName(schemeName, amcName);
       return {
         schemeCode,
-        schemeName,
+        schemeName: simpleName,
+        fullName: schemeName,
         amcName,
         planType: /\bdirect\b/i.test(schemeName) ? 'Direct' : 'Regular',
         optionType: 'Growth'
@@ -624,6 +676,20 @@ function isGrowthPlanName(name) {
 
 function isRegularOrDirectPlanName(name) {
   return /\b(regular|direct)\b/i.test(String(name || ''));
+}
+
+function simplifySchemeName(name, amcName) {
+  let s = name;
+  if (amcName) {
+    const amcCore = amcName.replace(/\bMutual\s+Fund\b/i, '').trim();
+    const regex = new RegExp(`^${amcCore}\\s+`, 'i');
+    s = s.replace(regex, '');
+  }
+  // Remove trailing scheme codes in parentheses or brackets
+  s = s.replace(/\s*[\(\[].*?[\)\]]\s*$/, '');
+  // Remove common prefixes like 'HSBC - '
+  s = s.replace(/^hsbc\s*-\s*/i, '');
+  return s.trim();
 }
 
 function detectAMCName(schemeName) {

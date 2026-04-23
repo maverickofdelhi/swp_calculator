@@ -199,7 +199,7 @@ app.get('/api/funds/amcs', async (req, res) => {
     const cacheKey = `amcs:${q}`;
     const cached = getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
     if (cached) {
-      return res.json({ results: cached, cached: true });
+      return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
 
     if (!catalogIndex.amcRows.length) {

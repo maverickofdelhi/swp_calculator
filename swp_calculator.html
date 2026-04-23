@@ -702,12 +702,14 @@ async function searchAMCsFromAPI() {
 
   if (query.length < 1) {
     hideAmcSuggestions();
-    return;
+    return [];
   }
 
   const cacheKey = query.toLowerCase();
   if (amcSuggestionsCache.has(cacheKey)) {
-    renderAmcSuggestions(amcSuggestionsCache.get(cacheKey));
+    const cachedResults = amcSuggestionsCache.get(cacheKey);
+    renderAmcSuggestions(cachedResults);
+    return cachedResults;
   }
 
   if (amcSearchController) {
@@ -725,11 +727,13 @@ async function searchAMCsFromAPI() {
     const results = Array.isArray(data.results) ? data.results.slice(0, 40) : [];
     amcSuggestionsCache.set(cacheKey, results);
     renderAmcSuggestions(results);
+    return results;
   } catch (err) {
     if (err && (err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('abort'))) {
-      return;
+      return [];
     }
     hideAmcSuggestions();
+    return [];
   }
 }
 
@@ -783,9 +787,10 @@ async function searchFundsFromAPI() {
   }
 }
 
-function handleFundSearchInput() {
-  if (!selectedAmcName) {
-    document.getElementById('apiFundMeta').textContent = 'Please select AMC first.';
+async function handleFundSearchInput() {
+  const amcReady = await ensureAmcSelectedForFundSearch();
+  if (!amcReady) {
+    document.getElementById('apiFundMeta').textContent = 'Type AMC in Step 1 (e.g. Axis) and it will auto-select.';
     return;
   }
 
@@ -831,13 +836,59 @@ function handleAmcSearchInput() {
   }
 }
 
+function pickBestAmcSuggestionIndex(typed, suggestions) {
+  if (!typed || !Array.isArray(suggestions) || !suggestions.length) return -1;
+  const normalized = typed.toLowerCase();
+  let bestIndex = -1;
+  let bestScore = -1;
+
+  for (let i = 0; i < suggestions.length; i++) {
+    const amcName = String(suggestions[i].amcName || '').trim().toLowerCase();
+    if (!amcName) continue;
+
+    let score = -1;
+    if (amcName === normalized) {
+      score = 300;
+    } else if (amcName.startsWith(normalized)) {
+      score = 200;
+    } else if (amcName.includes(normalized)) {
+      score = 100;
+    }
+
+    if (score < 0) continue;
+    const fundCount = Number(suggestions[i].fundCount || 0);
+    score += Math.min(fundCount, 99);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+}
+
 function tryAutoSelectTypedAmc() {
   const typed = document.getElementById('amcSearchApi').value.trim().toLowerCase();
-  if (!typed || selectedAmcName) return;
-  const index = lastAmcSuggestions.findIndex((amc) => String(amc.amcName || '').trim().toLowerCase() === typed);
+  if (!typed) return false;
+  if (selectedAmcName && selectedAmcName.toLowerCase().includes(typed)) return true;
+
+  const index = pickBestAmcSuggestionIndex(typed, lastAmcSuggestions);
   if (index >= 0) {
     selectAmcSuggestionByIndex(index);
+    return true;
   }
+  return false;
+}
+
+async function ensureAmcSelectedForFundSearch() {
+  if (selectedAmcName) return true;
+  const amcTyped = document.getElementById('amcSearchApi').value.trim();
+  if (!amcTyped) return false;
+
+  if (tryAutoSelectTypedAmc()) return true;
+  await searchAMCsFromAPI();
+  return tryAutoSelectTypedAmc();
 }
 
 function extractSchemeSelection(value) {
@@ -1577,9 +1628,11 @@ document.getElementById('amcSuggestions').addEventListener('pointerdown', (event
 });
 document.getElementById('amcSearchApi').addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
-  if (!lastAmcSuggestions.length) return;
   event.preventDefault();
-  selectAmcSuggestionByIndex(0);
+  if (tryAutoSelectTypedAmc()) return;
+  if (lastAmcSuggestions.length) {
+    selectAmcSuggestionByIndex(0);
+  }
 });
 
 document.getElementById('fundSearchApi').addEventListener('input', handleFundSearchInput);
@@ -1588,6 +1641,7 @@ document.getElementById('fundSearchApi').addEventListener('blur', () => {
   setTimeout(hideFundSuggestions, 220);
 });
 document.getElementById('fundSearchApi').addEventListener('focus', () => {
+  ensureAmcSelectedForFundSearch();
   if (lastFundSuggestions.length) {
     renderFundSuggestions(lastFundSuggestions);
     return;

@@ -99,8 +99,36 @@
     font-family: inherit;
     font-size: 0.95rem;
     padding: 11px 13px;
+    padding-right: 36px;
     outline: none;
     transition: border-color 0.2s;
+  }
+
+  .clear-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-2px);
+    background: #e4e4df;
+    color: #6c6c6c;
+    border: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    cursor: pointer;
+    z-index: 5;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+
+  .field:hover .clear-btn, .field input:focus + .clear-btn, .clear-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .field input:focus { border-color: var(--accent); }
@@ -498,11 +526,13 @@
       <div class="field">
         <label>Step 1: Select AMC</label>
         <input type="text" id="amcSearchApi" placeholder="Type AMC name (e.g. HDFC, SBI, Axis)" autocomplete="off">
+        <button type="button" class="clear-btn" id="clearAmc" title="Clear">×</button>
         <div id="amcSuggestions" class="search-suggestions hidden"></div>
       </div>
       <div class="field">
         <label>Step 2: Select Fund (Direct/Regular Growth)</label>
         <input type="text" id="fundSearchApi" placeholder="Select AMC first, then type fund name" autocomplete="off" disabled>
+        <button type="button" class="clear-btn" id="clearFund" title="Clear">×</button>
         <div id="fundSuggestions" class="search-suggestions hidden"></div>
       </div>
       <div class="field">
@@ -818,10 +848,7 @@ async function searchFundsFromAPI() {
     const top = topRaw.slice(0, 25).map((fund) => {
       const schemeCode = String(fund.schemeCode || '').trim();
       const schemeName = String(fund.schemeName || '').trim();
-      const amcName = String(fund.amcName || '').trim();
-      const display = amcName
-        ? `${amcName} -> ${schemeName} | ${schemeCode}`
-        : `${schemeName} | ${schemeCode}`;
+      const display = schemeName; 
       return { schemeCode, schemeName, display };
     }).filter((fund) => fund.schemeCode && fund.schemeName);
 
@@ -1669,7 +1696,7 @@ document.getElementById('amcSuggestions').addEventListener('click', (event) => {
     selectAmcSuggestionByIndex(index);
   }
 });
-document.getElementById('amcSuggestions').addEventListener('pointerdown', (event) => {
+document.getElementById('amcSuggestions').addEventListener('mousedown', (event) => {
   const btn = event.target.closest('button[data-index]');
   if (!btn) return;
   event.preventDefault();
@@ -1710,7 +1737,7 @@ document.getElementById('fundSuggestions').addEventListener('click', (event) => 
     selectFundSuggestionByIndex(index);
   }
 });
-document.getElementById('fundSuggestions').addEventListener('pointerdown', (event) => {
+document.getElementById('fundSuggestions').addEventListener('mousedown', (event) => {
   const btn = event.target.closest('button[data-index]');
   if (!btn) return;
   event.preventDefault();
@@ -1725,6 +1752,37 @@ document.getElementById('fundSearchApi').addEventListener('keydown', (event) => 
   event.preventDefault();
   selectFundSuggestionByIndex(0);
 });
+
+document.getElementById('clearAmc').addEventListener('click', () => {
+  const input = document.getElementById('amcSearchApi');
+  input.value = '';
+  selectedAmcName = '';
+  document.getElementById('fundSearchApi').disabled = true;
+  document.getElementById('fundSearchApi').placeholder = 'Select AMC first, then type fund name';
+  clearFundSelectionForAmc();
+  input.focus();
+});
+
+document.getElementById('clearFund').addEventListener('click', () => {
+  const input = document.getElementById('fundSearchApi');
+  input.value = '';
+  document.getElementById('schemeCode').value = '';
+  input.focus();
+  if (selectedAmcName) {
+    searchFundsFromAPI();
+  }
+});
+
+function updateClearBtnVisibility() {
+  const amcVal = document.getElementById('amcSearchApi').value;
+  const fundVal = document.getElementById('fundSearchApi').value;
+  document.getElementById('clearAmc').classList.toggle('visible', !!amcVal);
+  document.getElementById('clearFund').classList.toggle('visible', !!fundVal);
+}
+
+document.getElementById('amcSearchApi').addEventListener('input', updateClearBtnVisibility);
+document.getElementById('fundSearchApi').addEventListener('input', updateClearBtnVisibility);
+
 document.getElementById('schemeCode').addEventListener('input', handleSchemeCodeAutoFetch);
 document.getElementById('schemeCode').addEventListener('change', handleSchemeCodeAutoFetch);
 document.getElementById('schemeCode').addEventListener('blur', handleSchemeCodeAutoFetch);

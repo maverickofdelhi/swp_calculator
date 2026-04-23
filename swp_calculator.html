@@ -512,11 +512,17 @@
       </div>
       <div class="field">
         <label>Investment Date</label>
-        <input type="date" id="investmentDate" value="2018-03-15">
+        <div style="display:flex; gap:5px; align-items:center;">
+          <input type="date" id="investmentDate" value="2018-03-15">
+          <button type="button" class="clear-btn visible" onclick="resetToInception()" title="Reset to Inception">M</button>
+        </div>
       </div>
       <div class="field">
         <label>SWP Start Date</label>
-        <input type="date" id="swpStartDate" value="2018-04-12">
+        <div style="display:flex; gap:5px; align-items:center;">
+          <input type="date" id="swpStartDate" value="2018-04-12">
+          <button type="button" class="clear-btn visible" onclick="resetToMaxSWP()" title="Reset to Max SWP">M</button>
+        </div>
       </div>
       <div class="field">
         <label>Annual Withdrawal Rate (%)</label>
@@ -718,7 +724,9 @@ function selectFundSuggestionByIndex(index) {
   document.getElementById('schemeCode').value = fund.schemeCode;
   document.getElementById('apiFundMeta').textContent = `Selected: ${fund.schemeName} (Code: ${fund.schemeCode}). Loading live data...`;
   hideFundSuggestions();
-  fetchFundSinceInception(true);
+  
+  // Force reset dates to inception on manual selection to show full history
+  fetchFundSinceInception(false, true); 
 }
 
 function setStatusMessage(message, kind = 'info') {
@@ -1029,7 +1037,7 @@ function scheduleAutoFetch() {
   }, 250);
 }
 
-async function fetchFundSinceInception(isAuto = false) {
+async function fetchFundSinceInception(isAuto = false, forceReset = false) {
   const code = document.getElementById('schemeCode').value.trim();
   if (!code || !/^\d+$/.test(code)) {
     if (!isAuto) {
@@ -1101,16 +1109,20 @@ async function fetchFundSinceInception(isAuto = false) {
     rangeInfo.textContent = `Data available from ${inception} to ${latestAvailable}`;
     rangeInfo.classList.remove('hidden');
 
-    // Set dates to fund-valid defaults if current dates are outside range.
-    const firstInvestDate = document.getElementById('investmentDate').value;
-    const firstSWPDate = document.getElementById('swpStartDate').value;
-    if (!firstInvestDate || swpCompareDates(firstInvestDate, inception) < 0) {
+    // Set dates to fund-valid defaults.
+    // If forceReset is true (manual selection), we always go to inception.
+    if (forceReset || !firstInvestDate || swpCompareDates(firstInvestDate, inception) < 0 || swpCompareDates(firstInvestDate, latestAvailable) > 0) {
       document.getElementById('investmentDate').value = inception;
     }
-    if (!firstSWPDate || swpCompareDates(firstSWPDate, inception) < 0) {
-      const d = new Date(inception);
+    
+    // SWP Start Date: Default to 1 month after investment date
+    const currentInvestDate = document.getElementById('investmentDate').value;
+    if (forceReset || !firstSWPDate || swpCompareDates(firstSWPDate, currentInvestDate) <= 0 || swpCompareDates(firstSWPDate, latestAvailable) > 0) {
+      const d = new Date(currentInvestDate);
       d.setMonth(d.getMonth() + 1);
-      document.getElementById('swpStartDate').value = formatDate(d);
+      // Ensure we don't go past latest available
+      const swpDate = formatDate(d);
+      document.getElementById('swpStartDate').value = swpDate > latestAvailable ? latestAvailable : swpDate;
     }
     if (payload.returns) {
       const totalReturnText = payload.returns.totalReturnPercent !== null && payload.returns.totalReturnPercent !== undefined
@@ -1138,6 +1150,20 @@ async function fetchFundSinceInception(isAuto = false) {
     liveStatus.textContent = failureMessage;
     rangeInfo.classList.add('hidden');
   }
+}
+
+function resetToInception() {
+  if (!navData || !Object.keys(navData).length) return;
+  const dates = Object.keys(navData).sort();
+  document.getElementById('investmentDate').value = dates[0];
+}
+
+function resetToMaxSWP() {
+  const investDate = document.getElementById('investmentDate').value;
+  if (!investDate) return;
+  const d = new Date(investDate);
+  d.setMonth(d.getMonth() + 1);
+  document.getElementById('swpStartDate').value = formatDate(d);
 }
 
 async function fetchWithRetry(url, options = {}, retries = 2, timeoutMs = 8000) {
@@ -1485,6 +1511,13 @@ async function calculate() {
       setStatusMessage('');
     }
 
+    const gainLoss = Number(summary.netGainLoss || 0);
+    const gainLossClass = gainLoss > 0 ? 'gain' : (gainLoss < 0 ? 'loss' : '');
+    const gainLossSign = gainLoss > 0 ? '+' : '';
+    
+    const xirr = summary.xirrPercent !== null && summary.xirrPercent !== undefined ? summary.xirrPercent.toFixed(2) + '%' : 'N/A';
+    const xirrClass = (summary.xirrPercent || 0) > 0 ? 'gain' : ((summary.xirrPercent || 0) < 0 ? 'loss' : '');
+
     document.getElementById('summaryGrid').innerHTML = `
       <div class="stat-card highlight">
         <div class="stat-label">Initial Investment</div>
@@ -1498,13 +1531,13 @@ async function calculate() {
         <div class="stat-label">Current Portfolio Value</div>
         <div class="stat-value">₹${fmt(summary.currentPortfolioValue || 0)}</div>
       </div>
-      <div class="stat-card ${(summary.netGainLoss || 0) >= 0 ? 'gain' : 'loss'}">
+      <div class="stat-card ${gainLossClass}">
         <div class="stat-label">Net Gain / Loss</div>
-        <div class="stat-value">${(summary.netGainLoss || 0) >= 0 ? '+' : ''}₹${fmt(summary.netGainLoss || 0)}</div>
+        <div class="stat-value">${gainLossSign}₹${fmt(gainLoss)}</div>
       </div>
-      <div class="stat-card ${(summary.xirr || 0) >= 0 ? 'gain' : 'loss'}">
+      <div class="stat-card ${xirrClass}">
         <div class="stat-label">XIRR (Annualised)</div>
-        <div class="stat-value">${summary.xirrPercent !== null && summary.xirrPercent !== undefined ? summary.xirrPercent.toFixed(2) + '%' : 'N/A'}</div>
+        <div class="stat-value">${xirr}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Units Purchased at Start</div>

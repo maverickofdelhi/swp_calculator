@@ -892,6 +892,11 @@ function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualW
     cfAmounts.push(monthlyWithdrawal);
     cfDates.push(swpParseISODateUTC(actualDateStr));
 
+    let xirrVal = null;
+    if (cfAmounts.length >= 2) {
+      xirrVal = computeXIRR([...cfAmounts, portfolioAfter], [...cfDates, swpParseISODateUTC(actualDateStr)]);
+    }
+
     totalWithdrawn += monthlyWithdrawal;
     schedule.push({
       month,
@@ -901,8 +906,8 @@ function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualW
       unitsRemaining: swpRound(unitsHeld, 6),
       portfolioValue: swpRound(portfolioAfter, 2),
       amountWithdrawn: swpRound(monthlyWithdrawal, 2),
-      xirr: null,
-      xirrPercent: null
+      xirr: xirrVal !== null ? swpRound(xirrVal, 6) : null,
+      xirrPercent: xirrVal !== null ? swpRound(xirrVal * 100, 4) : null
     });
     month++;
     currentDate = swpAddMonths(swpParseISODateUTC(swpStartDate), month - 1);
@@ -914,9 +919,6 @@ function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualW
   const currentPortfolio = lastRow.portfolioValue;
   const netGainLoss = totalWithdrawn + currentPortfolio - initialInvestment;
   const finalXIRR = computeXIRR([...cfAmounts, currentPortfolio], [...cfDates, swpParseISODateUTC(lastRow.date)]);
-
-  lastRow.xirr = finalXIRR !== null ? swpRound(finalXIRR, 6) : null;
-  lastRow.xirrPercent = finalXIRR !== null ? swpRound(finalXIRR * 100, 4) : null;
 
   return {
     summary: {

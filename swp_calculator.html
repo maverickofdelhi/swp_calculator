@@ -1013,11 +1013,6 @@ function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualW
   const netGainLoss = totalWithdrawn + currentPortfolio - initialInvestment;
   const finalXIRR = computeXIRR([...cfAmounts, currentPortfolio], [...cfDates, swpParseISODateUTC(lastRow.date)]);
 
-  for (const row of schedule) {
-    row.xirr = finalXIRR !== null ? swpRound(finalXIRR, 6) : null;
-    row.xirrPercent = finalXIRR !== null ? swpRound(finalXIRR * 100, 4) : null;
-  }
-
   return {
     summary: {
       initialInvestment: swpRound(initialInvestment, 2),

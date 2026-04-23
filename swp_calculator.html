@@ -524,6 +524,10 @@ let selectedAmcName = '';
 let lastAmcSuggestions = [];
 let lastFundSuggestions = [];
 const schemeLookup = new Map();
+const amcSuggestionsCache = new Map();
+const fundSuggestionsCache = new Map();
+let amcSearchController = null;
+let fundSearchController = null;
 
 function hideSuggestions(elementId) {
   const box = document.getElementById(elementId);
@@ -701,11 +705,30 @@ async function searchAMCsFromAPI() {
     return;
   }
 
+  const cacheKey = query.toLowerCase();
+  if (amcSuggestionsCache.has(cacheKey)) {
+    renderAmcSuggestions(amcSuggestionsCache.get(cacheKey));
+  }
+
+  if (amcSearchController) {
+    amcSearchController.abort();
+  }
+  amcSearchController = new AbortController();
+
   try {
-    const data = await fetchWithRetry(`/api/funds/amcs?q=${encodeURIComponent(query)}`, {}, 1, 8000);
+    const data = await fetchWithRetry(
+      `/api/funds/amcs?q=${encodeURIComponent(query)}`,
+      { signal: amcSearchController.signal },
+      1,
+      6000
+    );
     const results = Array.isArray(data.results) ? data.results.slice(0, 40) : [];
+    amcSuggestionsCache.set(cacheKey, results);
     renderAmcSuggestions(results);
-  } catch (_) {
+  } catch (err) {
+    if (err && (err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('abort'))) {
+      return;
+    }
     hideAmcSuggestions();
   }
 }
@@ -720,9 +743,19 @@ async function searchFundsFromAPI() {
     return;
   }
 
+  const cacheKey = `${selectedAmcName.toLowerCase()}::${query.toLowerCase()}`;
+  if (fundSuggestionsCache.has(cacheKey)) {
+    renderFundSuggestions(fundSuggestionsCache.get(cacheKey));
+  }
+
+  if (fundSearchController) {
+    fundSearchController.abort();
+  }
+  fundSearchController = new AbortController();
+
   try {
     const backendUrl = `/api/funds/by-amc?amc=${encodeURIComponent(selectedAmcName)}&q=${encodeURIComponent(query)}`;
-    const data = await fetchWithRetry(backendUrl, {}, 1, 8000);
+    const data = await fetchWithRetry(backendUrl, { signal: fundSearchController.signal }, 1, 6000);
     const topRaw = Array.isArray(data.results)
       ? data.results
       : [];
@@ -740,8 +773,12 @@ async function searchFundsFromAPI() {
       schemeLookup.set(fund.schemeCode, fund.schemeName);
     }
 
+    fundSuggestionsCache.set(cacheKey, top);
     renderFundSuggestions(top);
-  } catch (_) {
+  } catch (err) {
+    if (err && (err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('abort'))) {
+      return;
+    }
     hideFundSuggestions();
   }
 }
@@ -753,7 +790,7 @@ function handleFundSearchInput() {
   }
 
   if (searchDebounce) clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(searchFundsFromAPI, 140);
+  searchDebounce = setTimeout(searchFundsFromAPI, 70);
 
   const value = document.getElementById('fundSearchApi').value;
   const parsed = extractSchemeSelection(value);
@@ -781,7 +818,7 @@ function handleFundSearchSelection() {
 
 function handleAmcSearchInput() {
   if (searchDebounce) clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(searchAMCsFromAPI, 120);
+  searchDebounce = setTimeout(searchAMCsFromAPI, 70);
 
   const typed = document.getElementById('amcSearchApi').value.trim();
   if (!typed || (selectedAmcName && typed === selectedAmcName)) return;
@@ -791,6 +828,15 @@ function handleAmcSearchInput() {
     document.getElementById('fundSearchApi').disabled = true;
     document.getElementById('fundSearchApi').placeholder = 'Select AMC first, then type fund name';
     clearFundSelectionForAmc();
+  }
+}
+
+function tryAutoSelectTypedAmc() {
+  const typed = document.getElementById('amcSearchApi').value.trim().toLowerCase();
+  if (!typed || selectedAmcName) return;
+  const index = lastAmcSuggestions.findIndex((amc) => String(amc.amcName || '').trim().toLowerCase() === typed);
+  if (index >= 0) {
+    selectAmcSuggestionByIndex(index);
   }
 }
 
@@ -1504,7 +1550,8 @@ function downloadFile(content, filename, mimeType) {
 
 document.getElementById('amcSearchApi').addEventListener('input', handleAmcSearchInput);
 document.getElementById('amcSearchApi').addEventListener('blur', () => {
-  setTimeout(hideAmcSuggestions, 140);
+  tryAutoSelectTypedAmc();
+  setTimeout(hideAmcSuggestions, 220);
 });
 document.getElementById('amcSearchApi').addEventListener('focus', () => {
   if (lastAmcSuggestions.length) {
@@ -1519,15 +1566,34 @@ document.getElementById('amcSuggestions').addEventListener('click', (event) => {
     selectAmcSuggestionByIndex(index);
   }
 });
+document.getElementById('amcSuggestions').addEventListener('pointerdown', (event) => {
+  const btn = event.target.closest('button[data-index]');
+  if (!btn) return;
+  event.preventDefault();
+  const index = Number(btn.dataset.index);
+  if (Number.isInteger(index)) {
+    selectAmcSuggestionByIndex(index);
+  }
+});
+document.getElementById('amcSearchApi').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  if (!lastAmcSuggestions.length) return;
+  event.preventDefault();
+  selectAmcSuggestionByIndex(0);
+});
 
 document.getElementById('fundSearchApi').addEventListener('input', handleFundSearchInput);
 document.getElementById('fundSearchApi').addEventListener('change', handleFundSearchSelection);
 document.getElementById('fundSearchApi').addEventListener('blur', () => {
-  setTimeout(hideFundSuggestions, 140);
+  setTimeout(hideFundSuggestions, 220);
 });
 document.getElementById('fundSearchApi').addEventListener('focus', () => {
   if (lastFundSuggestions.length) {
     renderFundSuggestions(lastFundSuggestions);
+    return;
+  }
+  if (selectedAmcName) {
+    searchFundsFromAPI();
   }
 });
 document.getElementById('fundSuggestions').addEventListener('click', (event) => {
@@ -1537,6 +1603,21 @@ document.getElementById('fundSuggestions').addEventListener('click', (event) => 
   if (Number.isInteger(index)) {
     selectFundSuggestionByIndex(index);
   }
+});
+document.getElementById('fundSuggestions').addEventListener('pointerdown', (event) => {
+  const btn = event.target.closest('button[data-index]');
+  if (!btn) return;
+  event.preventDefault();
+  const index = Number(btn.dataset.index);
+  if (Number.isInteger(index)) {
+    selectFundSuggestionByIndex(index);
+  }
+});
+document.getElementById('fundSearchApi').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  if (!lastFundSuggestions.length) return;
+  event.preventDefault();
+  selectFundSuggestionByIndex(0);
 });
 document.getElementById('schemeCode').addEventListener('input', handleSchemeCodeAutoFetch);
 document.getElementById('schemeCode').addEventListener('change', handleSchemeCodeAutoFetch);

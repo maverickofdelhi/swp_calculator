@@ -203,7 +203,26 @@ app.get('/api/funds/amcs', async (req, res) => {
     }
 
     if (!catalogIndex.amcRows.length) {
-      await warmFundCatalog();
+      const liveFunds = await loadFundsFromLiveSearch(q);
+      const amcToCount = new Map();
+      for (const fund of liveFunds) {
+        amcToCount.set(fund.amcName, (amcToCount.get(fund.amcName) || 0) + 1);
+      }
+
+      const liveResults = Array.from(amcToCount.entries())
+        .map(([amcName, fundCount]) => ({ amcName, fundCount }))
+        .sort((a, b) => {
+          const aStarts = q && a.amcName.toLowerCase().startsWith(q) ? 1 : 0;
+          const bStarts = q && b.amcName.toLowerCase().startsWith(q) ? 1 : 0;
+          if (aStarts !== bStarts) return bStarts - aStarts;
+          if (a.fundCount !== b.fundCount) return b.fundCount - a.fundCount;
+          return a.amcName.localeCompare(b.amcName);
+        })
+        .slice(0, 60);
+
+      setInCache(cache.search, cacheKey, liveResults);
+      warmFundCatalog().catch(() => null);
+      return res.json({ results: liveResults, cached: false, source: 'mfapi-search', warming: true });
     }
 
     const results = catalogIndex.amcRows
@@ -239,7 +258,31 @@ app.get('/api/funds/by-amc', async (req, res) => {
     }
 
     if (!catalogIndex.byAmc.size) {
-      await warmFundCatalog();
+      if (!q) {
+        warmFundCatalog().catch(() => null);
+        return res.json({ results: [], cached: false, source: 'mfapi-search', warming: true });
+      }
+
+      const liveFunds = await loadFundsFromLiveSearch(q);
+      const amcQuery = amc.toLowerCase();
+      const funds = liveFunds
+        .filter((fund) => String(fund.amcName || '').toLowerCase() === amcQuery)
+        .map((fund) => {
+          const scheme = fund.schemeName.toLowerCase();
+          let score = 0;
+          if (scheme.startsWith(q)) score += 20;
+          if (scheme.includes(q)) score += 10;
+          if (/\bindex\b|\belss\b|\bflexi\b|\blarge\b|\bmid\b|\bsmall\b/.test(scheme)) score += 4;
+          if (fund.planType === 'Direct') score += 1;
+          return { ...fund, score };
+        })
+        .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName))
+        .slice(0, 60)
+        .map(({ score, ...fund }) => fund);
+
+      setInCache(cache.search, cacheKey, funds);
+      warmFundCatalog().catch(() => null);
+      return res.json({ results: funds, cached: false, source: 'mfapi-search', warming: true });
     }
     const amcQuery = amc.toLowerCase();
     const funds = (catalogIndex.byAmc.get(amcQuery) || [])
@@ -525,6 +568,32 @@ async function loadFundCatalog() {
   catalogIndex = { byAmc, amcRows };
   setInCache(cache.catalog, 'master', filtered);
   return filtered;
+}
+
+async function loadFundsFromLiveSearch(query) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+
+  const payload = await httpGetJson(`${MFAPI_BASE}/mf/search?q=${encodeURIComponent(q)}`, { retries: 1, timeoutMs: 10000 });
+  const rows = Array.isArray(payload) ? payload : [];
+
+  return rows
+    .map((row) => {
+      const schemeCode = String(row.schemeCode || '').trim();
+      const schemeName = String(row.schemeName || '').trim();
+      if (!schemeCode || !schemeName) return null;
+      if (!isGrowthPlanName(schemeName) || !isRegularOrDirectPlanName(schemeName)) return null;
+
+      const amcName = detectAMCName(schemeName);
+      return {
+        schemeCode,
+        schemeName,
+        amcName,
+        planType: /\bdirect\b/i.test(schemeName) ? 'Direct' : 'Regular',
+        optionType: 'Growth'
+      };
+    })
+    .filter(Boolean);
 }
 
 function warmFundCatalog() {

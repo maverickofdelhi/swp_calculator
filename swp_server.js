@@ -38,6 +38,12 @@ const CACHE_TTL_MS = {
   catalog: 24 * 60 * 60 * 1000
 };
 
+let catalogWarmupPromise = null;
+let catalogIndex = {
+  byAmc: new Map(),
+  amcRows: []
+};
+
 const AMC_HOUSES = [
   '360 ONE Mutual Fund',
   'Aditya Birla Sun Life Mutual Fund',
@@ -171,7 +177,7 @@ app.get('/api/funds/search', async (req, res) => {
       return res.json({ results: cached, cached: true });
     }
 
-    const catalog = await loadFundCatalog();
+    const catalog = await warmFundCatalog();
     const queryTokens = tokenizeSearch(q);
     const results = catalog
       .map((fund) => ({ ...fund, score: scoreFundForSearch(fund, q, queryTokens) }))
@@ -196,16 +202,16 @@ app.get('/api/funds/amcs', async (req, res) => {
       return res.json({ results: cached, cached: true });
     }
 
-    const catalog = await loadFundCatalog();
-    const amcToCount = new Map();
-    for (const fund of catalog) {
-      const amc = String(fund.amcName || '').trim();
-      if (!amc) continue;
-      amcToCount.set(amc, (amcToCount.get(amc) || 0) + 1);
+    if (!catalogIndex.amcRows.length) {
+      warmFundCatalog().catch(() => null);
+      const fallback = AMC_HOUSES
+        .map((amcName) => ({ amcName, fundCount: null }))
+        .filter((row) => !q || row.amcName.toLowerCase().includes(q))
+        .slice(0, 60);
+      return res.json({ results: fallback, cached: false, warming: true });
     }
 
-    const results = Array.from(amcToCount.entries())
-      .map(([amcName, fundCount]) => ({ amcName, fundCount }))
+    const results = catalogIndex.amcRows
       .filter((row) => !q || row.amcName.toLowerCase().includes(q))
       .sort((a, b) => {
         const aStarts = q && a.amcName.toLowerCase().startsWith(q) ? 1 : 0;
@@ -237,10 +243,11 @@ app.get('/api/funds/by-amc', async (req, res) => {
       return res.json({ results: cached, cached: true });
     }
 
-    const catalog = await loadFundCatalog();
+    if (!catalogIndex.byAmc.size) {
+      await warmFundCatalog();
+    }
     const amcQuery = amc.toLowerCase();
-    const funds = catalog
-      .filter((fund) => fund.amcName.toLowerCase() === amcQuery)
+    const funds = (catalogIndex.byAmc.get(amcQuery) || [])
       .filter((fund) => !q || fund.schemeName.toLowerCase().includes(q))
       .map((fund) => {
         const scheme = fund.schemeName.toLowerCase();
@@ -500,8 +507,37 @@ async function loadFundCatalog() {
     })
     .filter(Boolean);
 
+  const byAmc = new Map();
+  const amcToCount = new Map();
+  for (const fund of filtered) {
+    const key = String(fund.amcName || '').toLowerCase();
+    if (!key) continue;
+    if (!byAmc.has(key)) byAmc.set(key, []);
+    byAmc.get(key).push(fund);
+    amcToCount.set(fund.amcName, (amcToCount.get(fund.amcName) || 0) + 1);
+  }
+
+  const amcRows = Array.from(amcToCount.entries())
+    .map(([amcName, fundCount]) => ({ amcName, fundCount }))
+    .sort((a, b) => b.fundCount - a.fundCount || a.amcName.localeCompare(b.amcName));
+
+  catalogIndex = { byAmc, amcRows };
   setInCache(cache.catalog, 'master', filtered);
   return filtered;
+}
+
+function warmFundCatalog() {
+  const cached = getFromCache(cache.catalog, 'master', CACHE_TTL_MS.catalog);
+  if (cached) return Promise.resolve(cached);
+
+  if (!catalogWarmupPromise) {
+    catalogWarmupPromise = loadFundCatalog().catch((err) => {
+      catalogWarmupPromise = null;
+      throw err;
+    });
+  }
+
+  return catalogWarmupPromise;
 }
 
 function isGrowthPlanName(name) {
@@ -922,6 +958,10 @@ if (require.main === module) {
     console.log(`  URL:    http://localhost:${PORT}`);
     console.log(`  API:    http://localhost:${PORT}/api/calculate`);
     console.log(`  Health: http://localhost:${PORT}/api/health\n`);
+
+    warmFundCatalog()
+      .then(() => console.log('[catalog] warm cache ready'))
+      .catch((err) => console.warn('[catalog] warm cache failed:', err.message));
   });
 }
 

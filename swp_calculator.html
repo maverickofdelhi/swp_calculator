@@ -574,6 +574,7 @@ function selectAmcSuggestionByIndex(index) {
   clearFundSelectionForAmc();
   document.getElementById('apiFundMeta').textContent = `AMC selected: ${amc.amcName}. Now choose a Direct/Regular Growth fund.`;
   hideAmcSuggestions();
+  searchFundsFromAPI();
 }
 
 function renderFundSuggestions(results) {
@@ -695,7 +696,7 @@ async function searchAMCsFromAPI() {
   const input = document.getElementById('amcSearchApi');
   const query = (input.value || '').trim();
 
-  if (query.length < 2) {
+  if (query.length < 1) {
     hideAmcSuggestions();
     return;
   }
@@ -716,11 +717,6 @@ async function searchFundsFromAPI() {
   if (!selectedAmcName) {
     hideFundSuggestions();
     document.getElementById('apiFundMeta').textContent = 'Please select AMC first.';
-    return;
-  }
-
-  if (query.length < 2) {
-    hideFundSuggestions();
     return;
   }
 
@@ -757,7 +753,7 @@ function handleFundSearchInput() {
   }
 
   if (searchDebounce) clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(searchFundsFromAPI, 350);
+  searchDebounce = setTimeout(searchFundsFromAPI, 140);
 
   const value = document.getElementById('fundSearchApi').value;
   const parsed = extractSchemeSelection(value);
@@ -785,7 +781,7 @@ function handleFundSearchSelection() {
 
 function handleAmcSearchInput() {
   if (searchDebounce) clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(searchAMCsFromAPI, 300);
+  searchDebounce = setTimeout(searchAMCsFromAPI, 120);
 
   const typed = document.getElementById('amcSearchApi').value.trim();
   if (!typed || (selectedAmcName && typed === selectedAmcName)) return;

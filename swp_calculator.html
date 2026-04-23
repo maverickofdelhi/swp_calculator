@@ -579,7 +579,7 @@ async function searchFundsFromAPI() {
   try {
     const backendUrl = `/api/funds/search?q=${encodeURIComponent(query)}`;
     const directUrl = `https://api.mfapi.in/mf/search?q=${encodeURIComponent(query)}`;
-    const data = await fetchJSONWithFallback(directUrl, backendUrl);
+    const data = await fetchJSONWithFallback(backendUrl, directUrl);
     const topRaw = Array.isArray(data.results)
       ? data.results
       : (Array.isArray(data) ? data : []);

@@ -25,6 +25,7 @@ if (REDIS_URL) {
   try {
     redisClient = new Redis(REDIS_URL, {
       maxRetriesPerRequest: 3,
+      commandTimeout: 2000,
       retryStrategy(times) {
         if (times > 3) return null;
         return Math.min(times * 50, 2000);
@@ -146,6 +147,11 @@ const AMC_ALIASES = {
   'union': 'Union Mutual Fund',
   'uti': 'UTI Mutual Fund',
   'whiteoak': 'WhiteOak Capital Mutual Fund',
+  'white oak': 'WhiteOak Capital Mutual Fund',
+  'whiteoak capital': 'WhiteOak Capital Mutual Fund',
+  'white oak capital': 'WhiteOak Capital Mutual Fund',
+  'whiteoak mutual fund': 'WhiteOak Capital Mutual Fund',
+  'white oak mutual fund': 'WhiteOak Capital Mutual Fund',
   'zerodha': 'Zerodha Mutual Fund'
 };
 
@@ -714,7 +720,7 @@ async function warmFundCatalog() {
 function isGrowthPlanName(name) {
   const n = String(name || '').toLowerCase();
   // Must have 'growth'
-  const hasGrowth = /\bgrowth\b/i.test(n) || /growth\s*option/i.test(n);
+  const hasGrowth = /\bgrowth\b/i.test(n) || /growth\s*option/i.test(n) || /-growth/i.test(n);
   if (!hasGrowth) return false;
   
   // Must NOT have these 'dead' or irrelevant terms
@@ -732,26 +738,26 @@ function simplifySchemeName(name, amcName) {
   if (amcName) {
     const amcCore = amcName.replace(/\bMutual\s+Fund\b/i, '').trim();
     const escapedCore = amcCore.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`^${escapedCore}\\s+[-]?\\s*`, 'i');
+    const regex = new RegExp(`^${escapedCore}\\s*[-]?\\s*`, 'i');
     s = s.replace(regex, '');
   }
   
   // Specific HSBC cleanup
-  s = s.replace(/^hsbc\s+mutual\s+fund\s+[-]?\s*/i, '');
-  s = s.replace(/^hsbc\s+[-]?\s*/i, '');
+  s = s.replace(/^hsbc\s+mutual\s+fund\s*[-]?\s*/i, '');
+  s = s.replace(/^hsbc\s*[-]?\s*/i, '');
 
   // Remove trailing metadata like scheme codes in brackets
   s = s.replace(/\s*[\(\[].*?[\)\]]\s*$/, '');
   
   // Remove redundant plan/option descriptors from the name itself for display
-  s = s.replace(/\s+[-]?\s*Direct\s+Plan\s+[-]?\s*Growth\s+Option/i, '');
-  s = s.replace(/\s+[-]?\s*Regular\s+Plan\s+[-]?\s*Growth\s+Option/i, '');
-  s = s.replace(/\s+[-]?\s*Direct\s+Growth/i, '');
-  s = s.replace(/\s+[-]?\s*Regular\s+Growth/i, '');
-  s = s.replace(/\s+[-]?\s*Direct\s+Plan/i, '');
-  s = s.replace(/\s+[-]?\s*Regular\s+Plan/i, '');
-  s = s.replace(/\s+[-]?\s*Growth\s+Option/i, '');
-  s = s.replace(/\s+[-]?\s*Growth/i, '');
+  s = s.replace(/\s*[-]?\s*Direct\s+Plan\s*[-]?\s*Growth\s+Option/i, '');
+  s = s.replace(/\s*[-]?\s*Regular\s+Plan\s*[-]?\s*Growth\s+Option/i, '');
+  s = s.replace(/\s*[-]?\s*Direct\s+Growth/i, '');
+  s = s.replace(/\s*[-]?\s*Regular\s+Growth/i, '');
+  s = s.replace(/\s*[-]?\s*Direct\s+Plan/i, '');
+  s = s.replace(/\s*[-]?\s*Regular\s+Plan/i, '');
+  s = s.replace(/\s*[-]?\s*Growth\s+Option/i, '');
+  s = s.replace(/\s*[-]?\s*Growth/i, '');
 
   return s.trim();
 }

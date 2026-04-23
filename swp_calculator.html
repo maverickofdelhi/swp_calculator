@@ -580,16 +580,25 @@ async function searchFundsFromAPI() {
     const backendUrl = `/api/funds/search?q=${encodeURIComponent(query)}`;
     const directUrl = `https://api.mfapi.in/mf/search?q=${encodeURIComponent(query)}`;
     const data = await fetchJSONWithFallback(directUrl, backendUrl);
-    const top = Array.isArray(data.results)
-      ? data.results.slice(0, 20)
-      : (Array.isArray(data) ? data.slice(0, 20) : []);
+    const topRaw = Array.isArray(data.results)
+      ? data.results
+      : (Array.isArray(data) ? data : []);
+    const top = topRaw.slice(0, 25).map((fund) => {
+      const schemeCode = String(fund.schemeCode || '').trim();
+      const schemeName = String(fund.schemeName || '').trim();
+      const amcName = String(fund.amcName || '').trim();
+      const display = amcName
+        ? `${amcName} -> ${schemeName} | ${schemeCode}`
+        : `${schemeName} | ${schemeCode}`;
+      return { schemeCode, schemeName, display };
+    }).filter((fund) => fund.schemeCode && fund.schemeName);
+
     for (const fund of top) {
-      if (fund && fund.schemeCode) {
-        schemeLookup.set(String(fund.schemeCode).trim(), String(fund.schemeName || '').trim());
-      }
+      schemeLookup.set(fund.schemeCode, fund.schemeName);
     }
+
     datalist.innerHTML = top
-      .map(f => `<option value="${String(f.schemeName).replace(/\"/g, '&quot;')} | ${f.schemeCode}"></option>`)
+      .map(f => `<option value="${String(f.display).replace(/\"/g, '&quot;')}"></option>`)
       .join('');
   } catch (_) {
     // Silent fail for search suggestions only.

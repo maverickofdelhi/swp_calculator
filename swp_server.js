@@ -28,13 +28,119 @@ app.use(express.static(__dirname));
 const MFAPI_BASE = 'https://api.mfapi.in';
 const cache = {
   search: new Map(),
-  history: new Map()
+  history: new Map(),
+  catalog: new Map()
 };
 
 const CACHE_TTL_MS = {
   search: 15 * 60 * 1000,
-  history: 24 * 60 * 60 * 1000
+  history: 24 * 60 * 60 * 1000,
+  catalog: 24 * 60 * 60 * 1000
 };
+
+const AMC_HOUSES = [
+  '360 ONE Mutual Fund',
+  'Aditya Birla Sun Life Mutual Fund',
+  'Angel One Mutual Fund',
+  'Axis Mutual Fund',
+  'Bajaj Finserv Mutual Fund',
+  'Bandhan Mutual Fund',
+  'Bank of India Mutual Fund',
+  'Baroda BNP Paribas Mutual Fund',
+  'Canara Robeco Mutual Fund',
+  'DSP Mutual Fund',
+  'Edelweiss Mutual Fund',
+  'Franklin Templeton Mutual Fund',
+  'Groww Mutual Fund',
+  'HDFC Mutual Fund',
+  'Helios Mutual Fund',
+  'HSBC Mutual Fund',
+  'ICICI Prudential Mutual Fund',
+  'ITI Mutual Fund',
+  'JM Financial Mutual Fund',
+  'Kotak Mahindra Mutual Fund',
+  'LIC Mutual Fund',
+  'Mahindra Manulife Mutual Fund',
+  'Mirae Asset Mutual Fund',
+  'Motilal Oswal Mutual Fund',
+  'Navi Mutual Fund',
+  'NJ Mutual Fund',
+  'Nippon India Mutual Fund',
+  'Old Bridge Mutual Fund',
+  'PGIM India Mutual Fund',
+  'PPFAS Mutual Fund',
+  'Quant Mutual Fund',
+  'Quantum Mutual Fund',
+  'Samco Mutual Fund',
+  'SBI Mutual Fund',
+  'Shriram Mutual Fund',
+  'Sundaram Mutual Fund',
+  'Tata Mutual Fund',
+  'Taurus Mutual Fund',
+  'Trust Mutual Fund',
+  'Union Mutual Fund',
+  'UTI Mutual Fund',
+  'WhiteOak Capital Mutual Fund',
+  'Zerodha Mutual Fund'
+];
+
+const AMC_ALIASES = {
+  'aditya birla sun life': 'Aditya Birla Sun Life Mutual Fund',
+  'axis': 'Axis Mutual Fund',
+  'bandhan': 'Bandhan Mutual Fund',
+  'bank of india': 'Bank of India Mutual Fund',
+  'baroda bnp paribas': 'Baroda BNP Paribas Mutual Fund',
+  'canara robeco': 'Canara Robeco Mutual Fund',
+  'dsp': 'DSP Mutual Fund',
+  'edelweiss': 'Edelweiss Mutual Fund',
+  'franklin': 'Franklin Templeton Mutual Fund',
+  'franklin templeton': 'Franklin Templeton Mutual Fund',
+  'groww': 'Groww Mutual Fund',
+  'hdfc': 'HDFC Mutual Fund',
+  'helios': 'Helios Mutual Fund',
+  'hsbc': 'HSBC Mutual Fund',
+  'icici prudential': 'ICICI Prudential Mutual Fund',
+  'idbi': 'IDBI Mutual Fund',
+  'iti': 'ITI Mutual Fund',
+  'jm': 'JM Financial Mutual Fund',
+  'kotak': 'Kotak Mahindra Mutual Fund',
+  'lic': 'LIC Mutual Fund',
+  'mahindra manulife': 'Mahindra Manulife Mutual Fund',
+  'mirae asset': 'Mirae Asset Mutual Fund',
+  'motilal oswal': 'Motilal Oswal Mutual Fund',
+  'navi': 'Navi Mutual Fund',
+  'nippon': 'Nippon India Mutual Fund',
+  'pgim': 'PGIM India Mutual Fund',
+  'parag parikh': 'PPFAS Mutual Fund',
+  'quant': 'Quant Mutual Fund',
+  'quantum': 'Quantum Mutual Fund',
+  'sbi': 'SBI Mutual Fund',
+  'sundaram': 'Sundaram Mutual Fund',
+  'tata': 'Tata Mutual Fund',
+  'taurus': 'Taurus Mutual Fund',
+  'union': 'Union Mutual Fund',
+  'uti': 'UTI Mutual Fund',
+  'whiteoak': 'WhiteOak Capital Mutual Fund',
+  'zerodha': 'Zerodha Mutual Fund'
+};
+
+const POPULAR_FUND_KEYWORDS = [
+  'flexi cap',
+  'large cap',
+  'mid cap',
+  'small cap',
+  'multicap',
+  'balanced advantage',
+  'index fund',
+  'nifty 50',
+  'sensex',
+  'bluechip',
+  'tax saver',
+  'elss',
+  'liquid fund',
+  'short duration',
+  'corporate bond'
+];
 
 // Serve HTML frontend if it exists in the same folder
 app.get('/', (req, res) => {
@@ -65,13 +171,14 @@ app.get('/api/funds/search', async (req, res) => {
       return res.json({ results: cached, cached: true });
     }
 
-    const data = await httpGetJson(`${MFAPI_BASE}/mf/search?q=${encodeURIComponent(q)}`);
-    const results = Array.isArray(data)
-      ? data.slice(0, 30).map((f) => ({
-          schemeCode: String(f.schemeCode),
-          schemeName: f.schemeName
-        }))
-      : [];
+    const catalog = await loadFundCatalog();
+    const queryTokens = tokenizeSearch(q);
+    const results = catalog
+      .map((fund) => ({ ...fund, score: scoreFundForSearch(fund, q, queryTokens) }))
+      .filter((fund) => fund.score > 0)
+      .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName))
+      .slice(0, 40)
+      .map(({ score, searchText, ...fund }) => fund);
 
     setInCache(cache.search, key, results);
     res.json({ results, cached: false });
@@ -289,6 +396,104 @@ function requestJson(url, timeoutMs) {
 
     request.on('error', (err) => reject(err));
   });
+}
+
+async function loadFundCatalog() {
+  const cached = getFromCache(cache.catalog, 'master', CACHE_TTL_MS.catalog);
+  if (cached) return cached;
+
+  const payload = await httpGetJson(`${MFAPI_BASE}/mf`, { retries: 1, timeoutMs: 12000 });
+  const rows = Array.isArray(payload) ? payload : [];
+
+  const filtered = rows
+    .map((row) => {
+      const schemeCode = String(row.schemeCode || '').trim();
+      const schemeName = String(row.schemeName || '').trim();
+      if (!schemeCode || !schemeName) return null;
+      if (!isGrowthPlanName(schemeName) || !isRegularOrDirectPlanName(schemeName)) return null;
+
+      const amcName = detectAMCName(schemeName);
+      const searchText = `${amcName} ${schemeName}`.toLowerCase();
+      return {
+        schemeCode,
+        schemeName,
+        amcName,
+        planType: /\bdirect\b/i.test(schemeName) ? 'Direct' : 'Regular',
+        optionType: 'Growth',
+        searchText
+      };
+    })
+    .filter(Boolean);
+
+  setInCache(cache.catalog, 'master', filtered);
+  return filtered;
+}
+
+function isGrowthPlanName(name) {
+  const n = String(name || '').toLowerCase();
+  return /\bgrowth\b/.test(n) || /growth\s*option/.test(n);
+}
+
+function isRegularOrDirectPlanName(name) {
+  return /\b(regular|direct)\b/i.test(String(name || ''));
+}
+
+function detectAMCName(schemeName) {
+  const name = String(schemeName || '').trim();
+  const lower = name.toLowerCase();
+
+  for (const [alias, canonical] of Object.entries(AMC_ALIASES)) {
+    if (lower.startsWith(alias + ' ') || lower.startsWith(alias + '-')) {
+      return canonical;
+    }
+  }
+
+  for (const amc of AMC_HOUSES) {
+    const simple = amc.toLowerCase().replace(/\s+mutual\s+fund$/, '').trim();
+    if (lower.startsWith(simple + ' ') || lower.startsWith(simple + '-')) {
+      return amc;
+    }
+  }
+
+  const prefix = name.split('-')[0].trim();
+  return prefix || 'Unknown AMC';
+}
+
+function tokenizeSearch(q) {
+  return String(q || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function scoreFundForSearch(fund, rawQuery, queryTokens) {
+  const q = String(rawQuery || '').toLowerCase().trim();
+  if (!q) return 0;
+
+  const scheme = fund.schemeName.toLowerCase();
+  const amc = fund.amcName.toLowerCase();
+  let score = 0;
+
+  if (scheme.startsWith(q)) score += 100;
+  if (amc.startsWith(q)) score += 160;
+  if (amc.includes(q)) score += 80;
+  if (scheme.includes(q)) score += 50;
+
+  for (const token of queryTokens) {
+    if (amc.includes(token)) score += 24;
+    if (scheme.includes(token)) score += 10;
+  }
+
+  for (const keyword of POPULAR_FUND_KEYWORDS) {
+    if (scheme.includes(keyword)) {
+      score += 8;
+      break;
+    }
+  }
+
+  if (fund.planType === 'Direct') score += 2;
+  return score;
 }
 
 // ---- Core SWP Calculation ----

@@ -832,6 +832,45 @@ function swpCompareDates(a, b) {
 }
 
 function computeXIRR(cashflows, dates) {
+  function evaluateNpv(rate) {
+    if (!Number.isFinite(rate) || rate <= -0.999999999) return null;
+    let total = 0;
+    for (let i = 0; i < cashflows.length; i++) {
+      const t = (dates[i] - dates[0]) / (365.25 * 86400000);
+      const factor = Math.pow(1 + rate, t);
+      if (!Number.isFinite(factor) || factor === 0) return null;
+      total += cashflows[i] / factor;
+    }
+    return Number.isFinite(total) ? total : null;
+  }
+
+  function solveByBisection(leftRate, rightRate) {
+    let left = leftRate;
+    let right = rightRate;
+    let leftValue = evaluateNpv(left);
+    let rightValue = evaluateNpv(right);
+    if (leftValue === null || rightValue === null || leftValue === 0 || rightValue === 0) {
+      return leftValue === 0 ? left : rightValue === 0 ? right : null;
+    }
+    if (leftValue * rightValue > 0) return null;
+
+    for (let i = 0; i < 120; i++) {
+      const mid = (left + right) / 2;
+      const midValue = evaluateNpv(mid);
+      if (midValue === null) return null;
+      if (Math.abs(midValue) < 1e-9) return mid;
+      if (leftValue * midValue <= 0) {
+        right = mid;
+        rightValue = midValue;
+      } else {
+        left = mid;
+        leftValue = midValue;
+      }
+    }
+
+    return (left + right) / 2;
+  }
+
   function npv(r) {
     return cashflows.reduce((acc, cf, i) => acc + cf / Math.pow(1 + r, (dates[i] - dates[0]) / (365.25 * 86400000)), 0);
   }
@@ -850,7 +889,57 @@ function computeXIRR(cashflows, dates) {
     r = r - fr / dfr;
     if (r < -0.9999) r = -0.9999;
   }
-  return isNaN(r) || !isFinite(r) ? null : r;
+
+  const newtonValue = Number.isFinite(r) ? evaluateNpv(r) : null;
+  if (newtonValue !== null && Math.abs(newtonValue) < 1e-6) {
+    return r;
+  }
+
+  const searchRanges = [
+    [-0.9999, -0.9],
+    [-0.9, -0.5],
+    [-0.5, 0],
+    [0, 0.5],
+    [0.5, 1],
+    [1, 2],
+    [2, 5],
+    [5, 10]
+  ];
+
+  let bestRate = null;
+  let bestValue = Infinity;
+
+  for (const [start, end] of searchRanges) {
+    const steps = 80;
+    let previousRate = start;
+    let previousValue = evaluateNpv(previousRate);
+    if (previousValue !== null && Math.abs(previousValue) < bestValue) {
+      bestValue = Math.abs(previousValue);
+      bestRate = previousRate;
+    }
+
+    for (let step = 1; step <= steps; step++) {
+      const currentRate = start + ((end - start) * step) / steps;
+      const currentValue = evaluateNpv(currentRate);
+      if (currentValue === null) continue;
+
+      const absCurrent = Math.abs(currentValue);
+      if (absCurrent < bestValue) {
+        bestValue = absCurrent;
+        bestRate = currentRate;
+      }
+
+      if (previousValue !== null && previousValue * currentValue <= 0) {
+        const root = solveByBisection(previousRate, currentRate);
+        if (root !== null) return root;
+      }
+
+      previousRate = currentRate;
+      previousValue = currentValue;
+    }
+  }
+
+  return bestValue < 1e-4 ? bestRate : null;
 }
 
 function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, navData: nd }) {
@@ -923,6 +1012,11 @@ function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualW
   const currentPortfolio = lastRow.portfolioValue;
   const netGainLoss = totalWithdrawn + currentPortfolio - initialInvestment;
   const finalXIRR = computeXIRR([...cfAmounts, currentPortfolio], [...cfDates, swpParseISODateUTC(lastRow.date)]);
+
+  for (const row of schedule) {
+    row.xirr = finalXIRR !== null ? swpRound(finalXIRR, 6) : null;
+    row.xirrPercent = finalXIRR !== null ? swpRound(finalXIRR * 100, 4) : null;
+  }
 
   return {
     summary: {

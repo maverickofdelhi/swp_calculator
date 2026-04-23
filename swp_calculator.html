@@ -126,6 +126,45 @@
     margin-bottom: 14px;
   }
 
+  .search-suggestions {
+    margin-top: 6px;
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+
+  .search-suggestions.hidden {
+    display: none;
+  }
+
+  .suggestion-item {
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    padding: 10px 12px;
+    font-size: 0.84rem;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+
+  .suggestion-item:last-child {
+    border-bottom: none;
+  }
+
+  .suggestion-item:hover {
+    background: var(--surface2);
+  }
+
+  .suggestion-empty {
+    padding: 10px 12px;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
   .nav-grid {
     display: grid;
     grid-template-columns: 1fr 1fr auto;
@@ -414,8 +453,8 @@
     <div class="api-row">
       <div class="field">
         <label>Search Fund (MFAPI)</label>
-        <input type="text" id="fundSearchApi" list="fundOptions" placeholder="Type fund name (e.g. HDFC, SBI, Axis)">
-        <datalist id="fundOptions"></datalist>
+        <input type="text" id="fundSearchApi" placeholder="Type fund name (e.g. HDFC, SBI, Axis)" autocomplete="off">
+        <div id="fundSuggestions" class="search-suggestions hidden"></div>
       </div>
       <div class="field">
         <label>Scheme Code</label>
@@ -476,7 +515,41 @@ let autoFetchDebounce = null;
 let lastFetchedSchemeCode = '';
 let lastCalculation = null;
 let trendChart = null;
+let lastFundSuggestions = [];
 const schemeLookup = new Map();
+
+function hideFundSuggestions() {
+  const box = document.getElementById('fundSuggestions');
+  box.classList.add('hidden');
+  box.innerHTML = '';
+}
+
+function renderFundSuggestions(results) {
+  const box = document.getElementById('fundSuggestions');
+  lastFundSuggestions = Array.isArray(results) ? results : [];
+
+  if (!lastFundSuggestions.length) {
+    box.innerHTML = '<div class="suggestion-empty">No matching funds found.</div>';
+    box.classList.remove('hidden');
+    return;
+  }
+
+  box.innerHTML = lastFundSuggestions
+    .map((fund, index) => `<button type="button" class="suggestion-item" data-index="${index}">${String(fund.display).replace(/"/g, '&quot;')}</button>`)
+    .join('');
+  box.classList.remove('hidden');
+}
+
+function selectFundSuggestionByIndex(index) {
+  const fund = lastFundSuggestions[index];
+  if (!fund) return;
+
+  document.getElementById('fundSearchApi').value = fund.display;
+  document.getElementById('schemeCode').value = fund.schemeCode;
+  document.getElementById('apiFundMeta').textContent = `Selected: ${fund.schemeName} (Code: ${fund.schemeCode}). Loading live data...`;
+  hideFundSuggestions();
+  fetchFundSinceInception(true);
+}
 
 function setStatusMessage(message, kind = 'info') {
   const el = document.getElementById('statusMsg');
@@ -568,11 +641,10 @@ function parseMFAPIDate(dateStr) {
 
 async function searchFundsFromAPI() {
   const input = document.getElementById('fundSearchApi');
-  const datalist = document.getElementById('fundOptions');
   const query = (input.value || '').trim();
 
   if (query.length < 2) {
-    datalist.innerHTML = '';
+    hideFundSuggestions();
     return;
   }
 
@@ -597,11 +669,9 @@ async function searchFundsFromAPI() {
       schemeLookup.set(fund.schemeCode, fund.schemeName);
     }
 
-    datalist.innerHTML = top
-      .map(f => `<option value="${String(f.display).replace(/\"/g, '&quot;')}"></option>`)
-      .join('');
+    renderFundSuggestions(top);
   } catch (_) {
-    // Silent fail for search suggestions only.
+    hideFundSuggestions();
   }
 }
 
@@ -628,6 +698,7 @@ function handleFundSearchSelection() {
     document.getElementById('apiFundMeta').textContent = parsed.name
       ? `Selected: ${parsed.name} (Code: ${parsed.code}). Loading live data...`
       : `Selected scheme code: ${parsed.code}. Loading live data...`;
+    hideFundSuggestions();
     fetchFundSinceInception(true);
   }
 }
@@ -1338,6 +1409,22 @@ function downloadFile(content, filename, mimeType) {
 
 document.getElementById('fundSearchApi').addEventListener('input', handleFundSearchInput);
 document.getElementById('fundSearchApi').addEventListener('change', handleFundSearchSelection);
+document.getElementById('fundSearchApi').addEventListener('blur', () => {
+  setTimeout(hideFundSuggestions, 140);
+});
+document.getElementById('fundSearchApi').addEventListener('focus', () => {
+  if (lastFundSuggestions.length) {
+    renderFundSuggestions(lastFundSuggestions);
+  }
+});
+document.getElementById('fundSuggestions').addEventListener('click', (event) => {
+  const btn = event.target.closest('button[data-index]');
+  if (!btn) return;
+  const index = Number(btn.dataset.index);
+  if (Number.isInteger(index)) {
+    selectFundSuggestionByIndex(index);
+  }
+});
 document.getElementById('schemeCode').addEventListener('input', handleSchemeCodeAutoFetch);
 document.getElementById('schemeCode').addEventListener('change', handleSchemeCodeAutoFetch);
 document.getElementById('schemeCode').addEventListener('blur', handleSchemeCodeAutoFetch);

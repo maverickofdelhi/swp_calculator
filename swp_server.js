@@ -117,7 +117,7 @@ app.get('/api/funds/:code/history', async (req, res) => {
  */
 app.post('/api/calculate', (req, res) => {
   try {
-    const { initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, schemeCode } = req.body;
+    const { initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, schemeCode, navData, schemeName } = req.body;
     console.info('[calculate]', { schemeCode, investmentDate, swpStartDate, annualWithdrawalRate, ip: req.ip });
 
     // Validate inputs
@@ -126,7 +126,15 @@ app.post('/api/calculate', (req, res) => {
       return res.status(400).json({ error: errors.join('; ') });
     }
 
-    const resultPromise = calculateSWPFromScheme({ initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, schemeCode });
+    const resultPromise = calculateSWPFromScheme({
+      initialInvestment,
+      investmentDate,
+      swpStartDate,
+      annualWithdrawalRate,
+      schemeCode,
+      navData,
+      schemeName
+    });
     resultPromise.then((result) => res.json(result)).catch((err) => {
       console.error('Calculation error:', err.message);
       res.status(500).json({ error: 'Calculation failed: ' + err.message });
@@ -428,9 +436,17 @@ function computeXIRR(cashflows, dates) {
   return isNaN(r) || !isFinite(r) ? null : r;
 }
 
-async function calculateSWPFromScheme({ initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, schemeCode }) {
-  const fund = await loadFundHistory(String(schemeCode));
-  const navData = fund.navData;
+async function calculateSWPFromScheme({ initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, schemeCode, navData: providedNavData, schemeName }) {
+  let fund = null;
+  let navData = null;
+
+  if (providedNavData && typeof providedNavData === 'object' && Object.keys(providedNavData).length > 0) {
+    navData = providedNavData;
+  } else {
+    fund = await loadFundHistory(String(schemeCode));
+    navData = fund.navData;
+  }
+
   const navKeys = Object.keys(navData).sort();
 
   const firstAvailable = navKeys[0];
@@ -448,16 +464,27 @@ async function calculateSWPFromScheme({ initialInvestment, investmentDate, swpSt
     navData
   });
 
-  result.fund = {
-    schemeCode: fund.schemeCode,
-    schemeName: fund.schemeName,
-    fundHouse: fund.fundHouse,
-    category: fund.category,
-    inceptionDate: fund.inceptionDate,
-    latestDate: fund.latestDate,
-    dataPoints: fund.dataPoints,
-    returns: fund.returns
-  };
+  result.fund = fund
+    ? {
+        schemeCode: fund.schemeCode,
+        schemeName: fund.schemeName,
+        fundHouse: fund.fundHouse,
+        category: fund.category,
+        inceptionDate: fund.inceptionDate,
+        latestDate: fund.latestDate,
+        dataPoints: fund.dataPoints,
+        returns: fund.returns
+      }
+    : {
+        schemeCode: String(schemeCode),
+        schemeName: schemeName || `Scheme ${schemeCode}`,
+        fundHouse: null,
+        category: null,
+        inceptionDate: navKeys[0],
+        latestDate: navKeys[navKeys.length - 1],
+        dataPoints: navKeys.length,
+        returns: null
+      };
   result.warnings = [];
   if (clampedInvestmentDate !== investmentDate) {
     result.warnings.push(`Investment date was adjusted to ${clampedInvestmentDate} to fit available data.`);

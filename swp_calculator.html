@@ -821,7 +821,9 @@ async function calculate() {
         investmentDate: investDate,
         swpStartDate: swpStart,
         annualWithdrawalRate: annualRate,
-        schemeCode
+        schemeCode,
+        schemeName: selectedFundMeta && selectedFundMeta.schemeName ? selectedFundMeta.schemeName : '',
+        navData: navData
       })
     });
 

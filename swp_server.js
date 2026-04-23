@@ -203,8 +203,7 @@ app.get('/api/funds/amcs', async (req, res) => {
     }
 
     if (!catalogIndex.amcRows.length) {
-      warmFundCatalog().catch(() => null);
-      return res.json({ results: [], cached: false, warming: true, source: 'mfapi' });
+      await warmFundCatalog();
     }
 
     const results = catalogIndex.amcRows

@@ -721,8 +721,8 @@ async function searchAMCsFromAPI() {
     const data = await fetchWithRetry(
       `/api/funds/amcs?q=${encodeURIComponent(query)}`,
       { signal: amcSearchController.signal },
-      1,
-      6000
+      2,
+      15000
     );
     const results = Array.isArray(data.results) ? data.results.slice(0, 40) : [];
     amcSuggestionsCache.set(cacheKey, results);
@@ -733,6 +733,7 @@ async function searchAMCsFromAPI() {
       return [];
     }
     hideAmcSuggestions();
+    document.getElementById('apiFundMeta').textContent = 'Loading AMC list is taking longer than expected. Please wait 2-5 seconds and type again.';
     return [];
   }
 }
@@ -759,7 +760,7 @@ async function searchFundsFromAPI() {
 
   try {
     const backendUrl = `/api/funds/by-amc?amc=${encodeURIComponent(selectedAmcName)}&q=${encodeURIComponent(query)}`;
-    const data = await fetchWithRetry(backendUrl, { signal: fundSearchController.signal }, 1, 6000);
+    const data = await fetchWithRetry(backendUrl, { signal: fundSearchController.signal }, 2, 15000);
     const topRaw = Array.isArray(data.results)
       ? data.results
       : [];
@@ -784,6 +785,7 @@ async function searchFundsFromAPI() {
       return;
     }
     hideFundSuggestions();
+    document.getElementById('apiFundMeta').textContent = 'Loading funds is taking longer than expected. Please keep typing or retry in a few seconds.';
   }
 }
 

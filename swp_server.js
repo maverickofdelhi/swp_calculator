@@ -20,7 +20,7 @@ const https = require('https');
 const Redis = require('ioredis');
 
 let redisClient = null;
-const REDIS_URL = process.env.REDIS_URL || 'redis://default:YYOc3flh3kJqGxa4Jxah7mUpS77spFBJ@redis-14484.crce263.ap-south-1-1.ec2.cloud.redislabs.com:14484';
+const REDIS_URL = process.env.REDIS_URL;
 if (REDIS_URL) {
   try {
     redisClient = new Redis(REDIS_URL, {
@@ -32,10 +32,12 @@ if (REDIS_URL) {
       }
     });
     redisClient.on('error', (err) => console.warn('[Redis] Connection Error:', err.message));
-    redisClient.on('connect', () => console.log('[Redis] Connected successfully'));
+    redisClient.on('connect', () => console.log('[Redis] Connected to Redis'));
   } catch (err) {
     console.warn('[Redis] Initialization failed:', err.message);
   }
+} else {
+  console.info('[Redis] No REDIS_URL found, using in-memory cache only.');
 }
 
 const app = express();
@@ -43,6 +45,13 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
+
+// Simple Request Logger (must be before static/routes to capture all hits)
+app.use((req, res, next) => {
+  console.info(`[${new Date().toISOString()}] ${req.method} ${req.url} - ${req.ip}`);
+  next();
+});
+
 app.use(express.static(__dirname));
 
 const MFAPI_BASE = 'https://api.mfapi.in';
@@ -249,27 +258,13 @@ app.get('/api/funds/amcs', async (req, res) => {
       return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
 
-    if (!catalogIndex.amcRows.length) {
-      // Fallback to hardcoded list if catalog is not yet warmed
-      const fallback = AMC_HOUSES
-        .filter((amc) => !q || amc.toLowerCase().includes(q))
-        .map((amcName) => ({ amcName, fundCount: '...' }))
-        .slice(0, 60);
+    // Always wait for real data — no static fallbacks with fake fund counts
+    const catalog = await warmFundCatalog();
 
-      if (fallback.length > 0) {
-        // Trigger background warmup but return fallback immediately
-        warmFundCatalog().catch(() => null);
-        return res.json({ results: fallback, cached: false, source: 'static-fallback', warming: true });
-      }
-
-      const liveFunds = await loadFundsFromLiveSearch(q);
-      const amcToCount = new Map();
-      for (const fund of liveFunds) {
-        amcToCount.set(fund.amcName, (amcToCount.get(fund.amcName) || 0) + 1);
-      }
-
-      const liveResults = Array.from(amcToCount.entries())
-        .map(([amcName, fundCount]) => ({ amcName, fundCount }))
+    if (catalogIndex.amcRows.length) {
+      // Catalog is ready: return real counts
+      const results = catalogIndex.amcRows
+        .filter((row) => !q || row.amcName.toLowerCase().includes(q))
         .sort((a, b) => {
           const aStarts = q && a.amcName.toLowerCase().startsWith(q) ? 1 : 0;
           const bStarts = q && b.amcName.toLowerCase().startsWith(q) ? 1 : 0;
@@ -279,13 +274,20 @@ app.get('/api/funds/amcs', async (req, res) => {
         })
         .slice(0, 60);
 
-      await setInCache(cache.search, cacheKey, liveResults, {}, CACHE_TTL_MS.search);
-      warmFundCatalog().catch(() => null);
-      return res.json({ results: liveResults, cached: false, source: 'mfapi-search', warming: true });
+      await setInCache(cache.search, cacheKey, results, {}, CACHE_TTL_MS.search);
+      return res.json({ results, cached: false, source: 'mfapi' });
     }
 
-    const results = catalogIndex.amcRows
-      .filter((row) => !q || row.amcName.toLowerCase().includes(q))
+    // Catalog warmup failed or timed out — use live MFAPI search with real counts
+    const liveFunds = await loadFundsFromLiveSearch(q || 'fund');
+    const amcToCount = new Map();
+    for (const fund of liveFunds) {
+      if (fund.amcName) {
+        amcToCount.set(fund.amcName, (amcToCount.get(fund.amcName) || 0) + 1);
+      }
+    }
+    const liveResults = Array.from(amcToCount.entries())
+      .map(([amcName, fundCount]) => ({ amcName, fundCount }))
       .sort((a, b) => {
         const aStarts = q && a.amcName.toLowerCase().startsWith(q) ? 1 : 0;
         const bStarts = q && b.amcName.toLowerCase().startsWith(q) ? 1 : 0;
@@ -295,8 +297,8 @@ app.get('/api/funds/amcs', async (req, res) => {
       })
       .slice(0, 60);
 
-    await setInCache(cache.search, cacheKey, results, {}, CACHE_TTL_MS.search);
-    res.json({ results, cached: false, source: 'mfapi' });
+    await setInCache(cache.search, cacheKey, liveResults, {}, CACHE_TTL_MS.search);
+    res.json({ results: liveResults, cached: false, source: 'mfapi-live' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load AMC list', details: err.message });
   }
@@ -316,32 +318,60 @@ app.get('/api/funds/by-amc', async (req, res) => {
       return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
 
-    if (!catalogIndex.byAmc.size) {
-      const liveQuery = q || deriveLiveSearchSeedFromAmc(amc);
-      const liveFunds = await loadFundsFromLiveSearch(liveQuery);
-      const amcQuery = amc.toLowerCase();
-      const funds = liveFunds
-        .filter((fund) => String(fund.amcName || '').toLowerCase() === amcQuery)
+    const amcQueryLower = amc.toLowerCase();
+
+    // Try catalog first (real fund counts, fully populated)
+    if (catalogIndex.byAmc.size) {
+      const funds = (catalogIndex.byAmc.get(amcQueryLower) || [])
+        .filter((fund) => !q || fund.schemeName.toLowerCase().includes(q))
         .map((fund) => {
           const scheme = fund.schemeName.toLowerCase();
           let score = 0;
-          if (scheme.startsWith(q)) score += 20;
-          if (scheme.includes(q)) score += 10;
+          if (q && scheme.startsWith(q)) score += 20;
+          if (q && scheme.includes(q)) score += 10;
           if (/\bindex\b|\belss\b|\bflexi\b|\blarge\b|\bmid\b|\bsmall\b/.test(scheme)) score += 4;
           if (fund.planType === 'Direct') score += 1;
           return { ...fund, score };
         })
         .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName))
         .slice(0, 60)
-        .map(({ score, ...fund }) => fund);
+        .map(({ score, searchText, ...fund }) => fund);
 
       await setInCache(cache.search, cacheKey, funds, {}, CACHE_TTL_MS.search);
-      warmFundCatalog().catch(() => null);
-      return res.json({ results: funds, cached: false, source: 'mfapi-search', warming: true });
+      return res.json({ results: funds, cached: false, source: 'mfapi' });
     }
-    const amcQuery = amc.toLowerCase();
-    const funds = (catalogIndex.byAmc.get(amcQuery) || [])
-      .filter((fund) => !q || fund.schemeName.toLowerCase().includes(q))
+
+    // Catalog not ready yet — wait for it (ensures real data)
+    await warmFundCatalog();
+    if (catalogIndex.byAmc.size) {
+      const funds = (catalogIndex.byAmc.get(amcQueryLower) || [])
+        .filter((fund) => !q || fund.schemeName.toLowerCase().includes(q))
+        .map((fund) => {
+          const scheme = fund.schemeName.toLowerCase();
+          let score = 0;
+          if (q && scheme.startsWith(q)) score += 20;
+          if (q && scheme.includes(q)) score += 10;
+          if (/\bindex\b|\belss\b|\bflexi\b|\blarge\b|\bmid\b|\bsmall\b/.test(scheme)) score += 4;
+          if (fund.planType === 'Direct') score += 1;
+          return { ...fund, score };
+        })
+        .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName))
+        .slice(0, 60)
+        .map(({ score, searchText, ...fund }) => fund);
+
+      await setInCache(cache.search, cacheKey, funds, {}, CACHE_TTL_MS.search);
+      return res.json({ results: funds, cached: false, source: 'mfapi' });
+    }
+
+    // Catalog warmup failed — fall back to live MFAPI search using real data
+    // Use substring match (not exact) so AMC names that differ slightly still work
+    const liveQuery = q || deriveLiveSearchSeedFromAmc(amc);
+    const liveFunds = await loadFundsFromLiveSearch(liveQuery);
+    const funds = liveFunds
+      .filter((fund) => {
+        const fundAmc = String(fund.amcName || '').toLowerCase();
+        return fundAmc.includes(amcQueryLower) || amcQueryLower.includes(fundAmc);
+      })
       .map((fund) => {
         const scheme = fund.schemeName.toLowerCase();
         let score = 0;
@@ -353,10 +383,10 @@ app.get('/api/funds/by-amc', async (req, res) => {
       })
       .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName))
       .slice(0, 60)
-      .map(({ score, searchText, ...fund }) => fund);
+      .map(({ score, ...fund }) => fund);
 
     await setInCache(cache.search, cacheKey, funds, {}, CACHE_TTL_MS.search);
-    res.json({ results: funds, cached: false, source: 'mfapi' });
+    res.json({ results: funds, cached: false, source: 'mfapi-live' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load funds by AMC', details: err.message });
   }
@@ -502,7 +532,9 @@ async function loadFundHistory(code) {
 
   const result = {
     schemeCode: code,
-    schemeName: payload.meta && payload.meta.scheme_name ? payload.meta.scheme_name : `Scheme ${code}`,
+    schemeName: payload.meta && payload.meta.scheme_name
+      ? payload.meta.scheme_name
+      : (() => { throw new Error(`MFAPI returned no scheme name for code ${code}`); })(),
     fundHouse: payload.meta && payload.meta.fund_house ? payload.meta.fund_house : null,
     category: payload.meta && payload.meta.scheme_category ? payload.meta.scheme_category : null,
     inceptionDate: firstDate,
@@ -569,7 +601,13 @@ async function httpGetJson(url, options = {}) {
 
 function requestJson(url, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const request = https.get(url, (response) => {
+    const options = {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+      }
+    };
+    const request = https.get(url, options, (response) => {
       let data = '';
       response.on('data', (chunk) => {
         data += chunk;
@@ -601,11 +639,17 @@ async function getLiveSchemeCodes() {
   }
 
   const data = await new Promise((resolve, reject) => {
-    https.get('https://portal.amfiindia.com/spages/NAVAll.txt', (res) => {
+    const req = https.get('https://portal.amfiindia.com/spages/NAVAll.txt', {
+      headers: { 'User-Agent': 'Mozilla/5.0 SWPCalculator/1.0' }
+    }, (res) => {
       let body = '';
       res.on('data', chunk => body += chunk);
       res.on('end', () => resolve(body));
-    }).on('error', reject);
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error('AMFI NAVAll.txt fetch timed out after 15s'));
+    });
+    req.on('error', reject);
   });
 
   const codes = new Set();
@@ -646,18 +690,24 @@ async function loadFundCatalog() {
   ]);
   const rows = Array.isArray(payload) ? payload : [];
 
-  const filtered = rows
-    .map((row) => {
+  // Use a chunked approach to avoid blocking the event loop for too long
+  const CHUNK_SIZE = 500;
+  const filtered = [];
+  
+  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + CHUNK_SIZE);
+    for (const row of chunk) {
       const schemeCode = String(row.schemeCode || '').trim();
       const schemeName = String(row.schemeName || '').trim();
-      if (!schemeCode || !schemeName) return null;
-      if (liveCodes.size > 0 && !liveCodes.has(schemeCode)) return null;
-      if (!isGrowthPlanName(schemeName) || !isRegularOrDirectPlanName(schemeName)) return null;
+      if (!schemeCode || !schemeName) continue;
+      if (liveCodes.size > 0 && !liveCodes.has(schemeCode)) continue;
+      if (!isGrowthPlanName(schemeName) || !isRegularOrDirectPlanName(schemeName)) continue;
 
       const amcName = detectAMCName(schemeName);
+      if (!amcName) continue; // Skip if we can't detect a real AMC name
       const simpleName = simplifySchemeName(schemeName, amcName);
       const searchText = `${amcName} ${schemeName}`.toLowerCase();
-      return {
+      filtered.push({
         schemeCode,
         schemeName: simpleName,
         fullName: schemeName,
@@ -667,9 +717,11 @@ async function loadFundCatalog() {
         searchText,
         isActive: true,
         auditStatus: 'Verified'
-      };
-    })
-    .filter(Boolean);
+      });
+    }
+    // Yield to the event loop if needed, but for now we just process in chunks
+    // To be truly non-blocking, we would use setImmediate here if we were in a larger loop
+  }
 
   const byAmc = new Map();
   const amcToCount = new Map();
@@ -712,6 +764,7 @@ async function loadFundsFromLiveSearch(query) {
       if (!isGrowthPlanName(schemeName) || !isRegularOrDirectPlanName(schemeName)) return null;
 
       const amcName = detectAMCName(schemeName);
+      if (!amcName) return null; // Skip if we can't detect a real AMC name
       const simpleName = simplifySchemeName(schemeName, amcName);
       return {
         schemeCode,
@@ -813,7 +866,7 @@ function detectAMCName(schemeName) {
   }
 
   const prefix = name.split('-')[0].trim();
-  return prefix || 'Unknown AMC';
+  return prefix || null; // Return null instead of a fake label
 }
 
 function tokenizeSearch(q) {
@@ -1052,7 +1105,7 @@ async function calculateSWPFromScheme({ initialInvestment, investmentDate, swpSt
       }
     : {
         schemeCode: String(schemeCode),
-        schemeName: schemeName || `Scheme ${schemeCode}`,
+        schemeName: schemeName || (() => { throw new Error(`Fund name unavailable for scheme ${schemeCode}. Fetch via code or use dropdown.`); })(),
         fundHouse: null,
         category: null,
         inceptionDate: navKeys[0],

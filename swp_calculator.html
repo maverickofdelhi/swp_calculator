@@ -526,25 +526,25 @@
     <div class="inputs-grid">
       <div class="field">
         <label>Initial Investment (₹)</label>
-        <input type="number" id="initialInvestment" value="1000000" min="1" inputmode="numeric">
+        <input type="number" id="initialInvestment" placeholder="e.g. 500000" min="1" inputmode="numeric">
       </div>
       <div class="field">
         <label>Investment Date</label>
         <div style="display:flex; gap:5px; align-items:center;">
-          <input type="date" id="investmentDate" value="2018-03-15">
+          <input type="date" id="investmentDate">
           <button type="button" class="clear-btn visible" onclick="resetToInception()" title="Reset to Inception">M</button>
         </div>
       </div>
       <div class="field">
         <label>SWP Start Date</label>
         <div style="display:flex; gap:5px; align-items:center;">
-          <input type="date" id="swpStartDate" value="2018-04-12">
+          <input type="date" id="swpStartDate">
           <button type="button" class="clear-btn visible" onclick="resetToMaxSWP()" title="Reset to Max SWP">M</button>
         </div>
       </div>
       <div class="field">
         <label>Annual Withdrawal Rate (%)</label>
-        <input type="number" id="annualWithdrawalRate" value="10" min="0.1" max="100" step="0.1" inputmode="decimal">
+        <input type="number" id="annualWithdrawalRate" placeholder="e.g. 8" min="0.1" max="100" step="0.1" inputmode="decimal">
       </div>
     </div>
   </div>
@@ -636,7 +636,7 @@ let amcSearchController = null;
 let fundSearchController = null;
 const API_BASE = window.location.hostname.includes('vercel.app')
   ? 'https://swp-calculator.onrender.com'
-  : '';
+  : (window.location.protocol === 'file:' ? 'http://localhost:3000' : '');
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -1082,6 +1082,34 @@ async function fetchFundSinceInception(isAuto = false, forceReset = false) {
   document.getElementById('errorMsg').classList.add('hidden');
   rangeInfo.classList.add('hidden');
 
+  // Helper: apply nav data once loaded successfully
+  function applyNavData(rebuilt, schemeName, source) {
+    navData = rebuilt;
+    selectedFundMeta = { schemeCode: code, schemeName, priceHistory: [], returns: null };
+    lastFetchedSchemeCode = code;
+    const allDates = Object.keys(navData).sort();
+    const latestAvailable = allDates[allDates.length - 1];
+    const inception = allDates[0];
+    rangeInfo.textContent = `Data available from ${inception} to ${latestAvailable}${source ? ' (' + source + ')' : ''}`;
+    rangeInfo.classList.remove('hidden');
+    // Fix investment date if out of range
+    const curInvest = document.getElementById('investmentDate').value;
+    if (forceReset || !curInvest || swpCompareDates(curInvest, inception) < 0 || swpCompareDates(curInvest, latestAvailable) > 0) {
+      document.getElementById('investmentDate').value = inception;
+    }
+    // Fix SWP start date
+    const investForSwp = document.getElementById('investmentDate').value;
+    const curSwp = document.getElementById('swpStartDate').value;
+    if (forceReset || !curSwp || swpCompareDates(curSwp, investForSwp) <= 0 || swpCompareDates(curSwp, latestAvailable) > 0) {
+      const nextMonth = swpAddMonths(swpParseISODateUTC(investForSwp), 1);
+      const proposed = swpFormatDate(nextMonth);
+      document.getElementById('swpStartDate').value = proposed > latestAvailable ? latestAvailable : proposed;
+    }
+    return { allDates, latestAvailable, inception };
+  }
+
+  // Primary path: local backend
+  let usedFallback = false;
   try {
     const backendUrl = apiUrl(`/api/funds/${code}/history`);
     const payload = await fetchWithRetry(backendUrl, {}, 2, 15000);
@@ -1090,14 +1118,9 @@ async function fetchFundSinceInception(isAuto = false, forceReset = false) {
     if (payload.navData && typeof payload.navData === 'object') {
       rows = Object.entries(payload.navData);
     } else if (Array.isArray(payload.data)) {
-      rows = payload.data
-        .map(item => [parseMFAPIDate(item.date), item.nav])
-        .filter(([iso]) => !!iso);
+      rows = payload.data.map(item => [parseMFAPIDate(item.date), item.nav]).filter(([iso]) => !!iso);
     }
-
-    if (!rows.length) {
-      throw new Error('No historical data returned for this scheme code.');
-    }
+    if (!rows.length) throw new Error('No historical data returned for this scheme code.');
 
     const rebuilt = {};
     for (const [isoDate, navRaw] of rows) {
@@ -1105,70 +1128,70 @@ async function fetchFundSinceInception(isAuto = false, forceReset = false) {
       if (!isoDate || !isFinite(navValue) || navValue <= 0) continue;
       rebuilt[isoDate] = navValue;
     }
+    if (!Object.keys(rebuilt).length) throw new Error('Unable to parse NAV data.');
 
-    const allDates = Object.keys(rebuilt).sort();
-    if (!allDates.length) {
-      showError('Historical data format invalid for this fund.');
-      apiMeta.textContent = 'Unable to parse fund history.';
-      return;
-    }
+    const schemeName = payload.schemeName || (payload.meta && payload.meta.scheme_name) || requestedName;
+    if (!schemeName) throw new Error(`Could not determine fund name for code ${code}. Please select the fund from the dropdown.`);
+    const { allDates } = applyNavData(rebuilt, schemeName, null);
+    selectedFundMeta.returns = payload.returns || null;
+    selectedFundMeta.priceHistory = payload.priceHistory || [];
 
-    navData = rebuilt;
-    selectedFundMeta = {
-      schemeCode: code,
-      schemeName: payload.schemeName || (payload.meta && payload.meta.scheme_name) || requestedName || `Scheme ${code}`,
-      priceHistory: payload.priceHistory || [],
-      returns: payload.returns || null
-    };
-    lastFetchedSchemeCode = code;
-
-    const latestAvailable = allDates[allDates.length - 1];
-    const inception = allDates[0];
-    rangeInfo.textContent = `Data available from ${inception} to ${latestAvailable}`;
-    rangeInfo.classList.remove('hidden');
-
-    // Set dates to fund-valid defaults.
-    // If forceReset is true (manual selection), we always go to inception.
-    if (forceReset || !firstInvestDate || swpCompareDates(firstInvestDate, inception) < 0 || swpCompareDates(firstInvestDate, latestAvailable) > 0) {
-      document.getElementById('investmentDate').value = inception;
-    }
-    
-    // SWP Start Date: Default to 1 month after investment date
-    const currentInvestDate = document.getElementById('investmentDate').value;
-    if (forceReset || !firstSWPDate || swpCompareDates(firstSWPDate, currentInvestDate) <= 0 || swpCompareDates(firstSWPDate, latestAvailable) > 0) {
-      const d = new Date(currentInvestDate);
-      d.setMonth(d.getMonth() + 1);
-      // Ensure we don't go past latest available
-      const swpDate = formatDate(d);
-      document.getElementById('swpStartDate').value = swpDate > latestAvailable ? latestAvailable : swpDate;
-    }
     if (payload.returns) {
-      const totalReturnText = payload.returns.totalReturnPercent !== null && payload.returns.totalReturnPercent !== undefined
-        ? `${payload.returns.totalReturnPercent.toFixed(2)}%`
-        : 'N/A';
-      const annualizedText = payload.returns.annualizedReturnPercent !== null && payload.returns.annualizedReturnPercent !== undefined
-        ? `${payload.returns.annualizedReturnPercent.toFixed(2)}%`
-        : 'N/A';
-      const cacheTag = payload.cached ? 'cached today' : 'fresh fetch';
-      const sourceTag = payload.source ? payload.source : 'live';
-      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Return ${totalReturnText} · Annualized ${annualizedText} · Source: ${sourceTag} (${cacheTag})`;
-      liveStatus.textContent = `${selectedFundMeta.schemeName} loaded with ${allDates.length} live NAV points (${sourceTag}, ${cacheTag}).`;
+      const tr = payload.returns.totalReturnPercent != null ? `${payload.returns.totalReturnPercent.toFixed(2)}%` : 'N/A';
+      const ar = payload.returns.annualizedReturnPercent != null ? `${payload.returns.annualizedReturnPercent.toFixed(2)}%` : 'N/A';
+      const tag = payload.cached ? 'cached' : 'fresh';
+      const src = payload.source || 'live';
+      apiMeta.textContent = `${schemeName} (Code: ${code}) · ${allDates.length} pts · Return ${tr} · CAGR ${ar} · ${src} (${tag})`;
+      liveStatus.textContent = `${schemeName} — ${allDates.length} NAV points loaded (${src}, ${tag}).`;
     } else {
-      const cacheTag = payload.cached ? 'cached today' : 'fresh fetch';
-      const sourceTag = payload.source ? payload.source : 'live';
-      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Source: ${sourceTag} (${cacheTag})`;
-      liveStatus.textContent = `${selectedFundMeta.schemeName} loaded with ${allDates.length} live NAV points (${sourceTag}, ${cacheTag}).`;
+      const tag = payload.cached ? 'cached' : 'fresh';
+      const src = payload.source || 'live';
+      apiMeta.textContent = `${schemeName} (Code: ${code}) · ${allDates.length} pts · ${src} (${tag})`;
+      liveStatus.textContent = `${schemeName} — ${allDates.length} NAV points loaded.`;
     }
+    return;
   } catch (err) {
-    console.error('Fetch error:', err);
-    const failureMessage = requestedName
-      ? `Live data fetch failed for ${requestedName} (Code: ${code}). Retry or choose another fund.`
-      : `Live data fetch failed for Code: ${code}. Retry or choose another fund.`;
-    apiMeta.textContent = failureMessage;
-    liveStatus.textContent = failureMessage;
-    rangeInfo.classList.add('hidden');
+    console.warn('Backend fetch failed, trying direct MFAPI:', err.message);
+    usedFallback = true;
   }
+
+  // Fallback: direct MFAPI (works when server offline)
+  if (usedFallback) {
+    try {
+      const fallbackUrl = `https://api.mfapi.in/mf/${code}`;
+      const payload = await fetchWithRetry(fallbackUrl, {}, 1, 12000);
+      if (!payload || !Array.isArray(payload.data) || !payload.data.length) {
+        throw new Error('No data from MFAPI');
+      }
+      const rebuilt = {};
+      for (const item of payload.data) {
+        const isoDate = parseMFAPIDate(item.date);
+        const navValue = parseFloat(item.nav);
+        if (!isoDate || !isFinite(navValue) || navValue <= 0) continue;
+        rebuilt[isoDate] = navValue;
+      }
+      if (!Object.keys(rebuilt).length) throw new Error('Unable to parse direct MFAPI data.');
+
+      const schemeName = (payload.meta && payload.meta.scheme_name) || requestedName;
+      if (!schemeName) throw new Error(`Fund name unavailable for code ${code}. Please use the dropdown to select the fund.`);
+      const { allDates } = applyNavData(rebuilt, schemeName, 'Direct');
+      apiMeta.textContent = `${schemeName} (Code: ${code}) · ${allDates.length} pts · Direct MFAPI (server offline)`;
+      liveStatus.textContent = `${schemeName} — ${allDates.length} NAV points loaded via direct MFAPI.`;
+      return;
+    } catch (fallbackErr) {
+      console.error('Direct MFAPI fallback also failed:', fallbackErr.message);
+    }
+  }
+
+  // Both failed
+  const failureMessage = requestedName
+    ? `Failed to load data for ${requestedName} (Code: ${code}). Check your connection and try again.`
+    : `Failed to load data for Code: ${code}. Check your connection and try again.`;
+  apiMeta.textContent = failureMessage;
+  liveStatus.textContent = failureMessage;
+  rangeInfo.classList.add('hidden');
 }
+
 
 function resetToInception() {
   if (!navData || !Object.keys(navData).length) return;
@@ -1179,9 +1202,8 @@ function resetToInception() {
 function resetToMaxSWP() {
   const investDate = document.getElementById('investmentDate').value;
   if (!investDate) return;
-  const d = new Date(investDate);
-  d.setMonth(d.getMonth() + 1);
-  document.getElementById('swpStartDate').value = formatDate(d);
+  const d = swpAddMonths(swpParseISODateUTC(investDate), 1);
+  document.getElementById('swpStartDate').value = swpFormatDate(d);
 }
 
 async function fetchWithRetry(url, options = {}, retries = 2, timeoutMs = 8000) {

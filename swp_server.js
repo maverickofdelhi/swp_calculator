@@ -198,10 +198,21 @@ app.get('/api/funds/search', async (req, res) => {
 
     const catalog = await warmFundCatalog();
     const queryTokens = tokenizeSearch(q);
-    const results = catalog
+    const scoredResults = catalog
       .map((fund) => ({ ...fund, score: scoreFundForSearch(fund, q, queryTokens) }))
       .filter((fund) => fund.score > 0)
-      .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName))
+      .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName));
+
+    // Deduplicate: If multiple funds have the same simplified name, keep only the best one
+    const uniqueMap = new Map();
+    for (const fund of scoredResults) {
+      const key = `${fund.amcName}:${fund.schemeName}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, fund);
+      }
+    }
+
+    const results = Array.from(uniqueMap.values())
       .slice(0, 40)
       .map(({ score, searchText, ...fund }) => fund);
 
@@ -702,7 +713,13 @@ async function warmFundCatalog() {
 
 function isGrowthPlanName(name) {
   const n = String(name || '').toLowerCase();
-  return /\bgrowth\b/.test(n) || /growth\s*option/.test(n);
+  // Must have 'growth'
+  const hasGrowth = /\bgrowth\b/i.test(n) || /growth\s*option/i.test(n);
+  if (!hasGrowth) return false;
+  
+  // Must NOT have these 'dead' or irrelevant terms
+  const isIrrelevant = /payout|reinvest|dividend|idcw|bonus|fmp|fixed maturity|interval|series|closed ended|institutional|segregated/i.test(n);
+  return !isIrrelevant;
 }
 
 function isRegularOrDirectPlanName(name) {
@@ -711,15 +728,31 @@ function isRegularOrDirectPlanName(name) {
 
 function simplifySchemeName(name, amcName) {
   let s = name;
+  // Remove AMC name from the start if it exists
   if (amcName) {
     const amcCore = amcName.replace(/\bMutual\s+Fund\b/i, '').trim();
-    const regex = new RegExp(`^${amcCore}\\s+`, 'i');
+    const escapedCore = amcCore.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`^${escapedCore}\\s+[-]?\\s*`, 'i');
     s = s.replace(regex, '');
   }
-  // Remove trailing scheme codes in parentheses or brackets
+  
+  // Specific HSBC cleanup
+  s = s.replace(/^hsbc\s+mutual\s+fund\s+[-]?\s*/i, '');
+  s = s.replace(/^hsbc\s+[-]?\s*/i, '');
+
+  // Remove trailing metadata like scheme codes in brackets
   s = s.replace(/\s*[\(\[].*?[\)\]]\s*$/, '');
-  // Remove common prefixes like 'HSBC - '
-  s = s.replace(/^hsbc\s*-\s*/i, '');
+  
+  // Remove redundant plan/option descriptors from the name itself for display
+  s = s.replace(/\s+[-]?\s*Direct\s+Plan\s+[-]?\s*Growth\s+Option/i, '');
+  s = s.replace(/\s+[-]?\s*Regular\s+Plan\s+[-]?\s*Growth\s+Option/i, '');
+  s = s.replace(/\s+[-]?\s*Direct\s+Growth/i, '');
+  s = s.replace(/\s+[-]?\s*Regular\s+Growth/i, '');
+  s = s.replace(/\s+[-]?\s*Direct\s+Plan/i, '');
+  s = s.replace(/\s+[-]?\s*Regular\s+Plan/i, '');
+  s = s.replace(/\s+[-]?\s*Growth\s+Option/i, '');
+  s = s.replace(/\s+[-]?\s*Growth/i, '');
+
   return s.trim();
 }
 
@@ -760,24 +793,37 @@ function scoreFundForSearch(fund, rawQuery, queryTokens) {
   const amc = fund.amcName.toLowerCase();
   let score = 0;
 
-  if (scheme.startsWith(q)) score += 100;
+  // Exact match boost
+  if (scheme === q) score += 500;
+  
+  // Prefix boosts
+  if (scheme.startsWith(q)) score += 200;
   if (amc.startsWith(q)) score += 160;
+  
+  // Inclusion boosts
   if (amc.includes(q)) score += 80;
-  if (scheme.includes(q)) score += 50;
+  if (scheme.includes(q)) score += 100;
 
+  // Token matching
   for (const token of queryTokens) {
-    if (amc.includes(token)) score += 24;
-    if (scheme.includes(token)) score += 10;
+    if (amc.includes(token)) score += 30;
+    if (scheme.includes(token)) score += 40;
   }
 
+  // Popularity boost
   for (const keyword of POPULAR_FUND_KEYWORDS) {
     if (scheme.includes(keyword)) {
-      score += 8;
+      score += 25;
       break;
     }
   }
 
-  if (fund.planType === 'Direct') score += 2;
+  // Plan Type preference (Direct is usually better for SWP)
+  if (fund.planType === 'Direct') score += 50;
+  
+  // Small boost for common terms
+  if (/\bbluechip\b|\bopportunity\b|\bfocus\b/i.test(scheme)) score += 15;
+
   return score;
 }
 
@@ -1092,12 +1138,14 @@ function wait(ms) {
 }
 
 async function getFromCache(map, key, ttlMs, options = {}) {
+  // console.info('[cache-get] checking:', key);
   // 1. Try Redis first
   if (redisClient && redisClient.status === 'ready') {
     try {
       const redisKey = `swp:cache:${key}`;
       const val = await redisClient.get(redisKey);
       if (val) {
+        // console.info('[cache-get] hit (Redis):', key);
         const item = JSON.parse(val);
         // Validate dayKey if provided
         if (options.dayKey && item.dayKey !== options.dayKey) {
@@ -1114,6 +1162,7 @@ async function getFromCache(map, key, ttlMs, options = {}) {
   // 2. Fallback to in-memory map
   const item = map.get(key);
   if (!item) return null;
+  // console.info('[cache-get] hit (Map):', key);
   if (options.dayKey && item.dayKey !== options.dayKey) {
     map.delete(key);
     return null;

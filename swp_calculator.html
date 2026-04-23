@@ -762,8 +762,22 @@ async function fetchWithRetry(url, options = {}, retries = 2, timeoutMs = 8000) 
     try {
       const res = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timer);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
+      const bodyText = await res.text();
+      if (!res.ok) {
+        const preview = bodyText.trim().slice(0, 120);
+        throw new Error(preview ? `HTTP ${res.status}: ${preview}` : `HTTP ${res.status}`);
+      }
+
+      if (!bodyText.trim()) {
+        return {};
+      }
+
+      try {
+        return JSON.parse(bodyText);
+      } catch (parseErr) {
+        const preview = bodyText.trim().slice(0, 120);
+        throw new Error(`Invalid JSON response from ${url}: ${parseErr.message}${preview ? `; body starts with: ${preview}` : ''}`);
+      }
     } catch (err) {
       clearTimeout(timer);
       lastError = err;

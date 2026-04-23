@@ -115,7 +115,12 @@ const AMC_ALIASES = {
   'axis': 'Axis Mutual Fund',
   'bandhan': 'Bandhan Mutual Fund',
   'bank of india': 'Bank of India Mutual Fund',
+  'baroda': 'Baroda BNP Paribas Mutual Fund',
+  'baroda bnp': 'Baroda BNP Paribas Mutual Fund',
   'baroda bnp paribas': 'Baroda BNP Paribas Mutual Fund',
+  'bnp paribas': 'Baroda BNP Paribas Mutual Fund',
+  'bnp': 'Baroda BNP Paribas Mutual Fund',
+  'canara': 'Canara Robeco Mutual Fund',
   'canara robeco': 'Canara Robeco Mutual Fund',
   'dsp': 'DSP Mutual Fund',
   'edelweiss': 'Edelweiss Mutual Fund',
@@ -125,19 +130,27 @@ const AMC_ALIASES = {
   'hdfc': 'HDFC Mutual Fund',
   'helios': 'Helios Mutual Fund',
   'hsbc': 'HSBC Mutual Fund',
+  'icici': 'ICICI Prudential Mutual Fund',
   'icici prudential': 'ICICI Prudential Mutual Fund',
   'idbi': 'IDBI Mutual Fund',
+  'idfc': 'Bandhan Mutual Fund',
   'iti': 'ITI Mutual Fund',
   'jm': 'JM Financial Mutual Fund',
   'kotak': 'Kotak Mahindra Mutual Fund',
   'lic': 'LIC Mutual Fund',
+  'l&t': 'HSBC Mutual Fund',
+  'mahindra': 'Mahindra Manulife Mutual Fund',
   'mahindra manulife': 'Mahindra Manulife Mutual Fund',
+  'mirae': 'Mirae Asset Mutual Fund',
   'mirae asset': 'Mirae Asset Mutual Fund',
+  'motilal': 'Motilal Oswal Mutual Fund',
   'motilal oswal': 'Motilal Oswal Mutual Fund',
   'navi': 'Navi Mutual Fund',
   'nippon': 'Nippon India Mutual Fund',
+  'nippon india': 'Nippon India Mutual Fund',
   'pgim': 'PGIM India Mutual Fund',
   'parag parikh': 'PPFAS Mutual Fund',
+  'ppfas': 'PPFAS Mutual Fund',
   'quant': 'Quant Mutual Fund',
   'quantum': 'Quantum Mutual Fund',
   'sbi': 'SBI Mutual Fund',
@@ -150,8 +163,6 @@ const AMC_ALIASES = {
   'white oak': 'WhiteOak Capital Mutual Fund',
   'whiteoak capital': 'WhiteOak Capital Mutual Fund',
   'white oak capital': 'WhiteOak Capital Mutual Fund',
-  'whiteoak mutual fund': 'WhiteOak Capital Mutual Fund',
-  'white oak mutual fund': 'WhiteOak Capital Mutual Fund',
   'zerodha': 'Zerodha Mutual Fund'
 };
 
@@ -515,6 +526,18 @@ async function loadFundHistory(code) {
   return result;
 }
 
+function parseAMFIDate(dateStr) {
+  if (!dateStr || dateStr === '-') return null;
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return null;
+  const day = parseInt(parts[0], 10);
+  const months = { 'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5, 'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11 };
+  const month = months[parts[1]];
+  const year = parseInt(parts[2], 10);
+  if (isNaN(day) || month === undefined || isNaN(year)) return null;
+  return new Date(Date.UTC(year, month, day));
+}
+
 function parseMFAPIDate(dateStr) {
   const parts = String(dateStr || '').split('-');
   if (parts.length !== 3) return null;
@@ -527,7 +550,7 @@ function parseMFAPIDate(dateStr) {
 
 async function httpGetJson(url, options = {}) {
   const retries = options.retries ?? 2;
-  const timeoutMs = options.timeoutMs ?? 8000;
+  const timeoutMs = options.timeoutMs ?? 15000;
   let lastError = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -587,12 +610,20 @@ async function getLiveSchemeCodes() {
 
   const codes = new Set();
   const lines = data.split('\n');
+  const ninetyDaysAgo = new Date();
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
   for (const line of lines) {
     const parts = line.split(';');
     if (parts.length >= 6) {
       const code = parts[0].trim();
+      const dateStr = parts[5].trim(); // Format: 22-Apr-2026
       if (/^\d+$/.test(code)) {
-        codes.add(code);
+        // Recency Audit: Only keep if updated in last 90 days
+        const lastUpdate = parseAMFIDate(dateStr);
+        if (lastUpdate && lastUpdate >= ninetyDaysAgo) {
+          codes.add(code);
+        }
       }
     }
   }
@@ -633,7 +664,9 @@ async function loadFundCatalog() {
         amcName,
         planType: /\bdirect\b/i.test(schemeName) ? 'Direct' : 'Regular',
         optionType: 'Growth',
-        searchText
+        searchText,
+        isActive: true,
+        auditStatus: 'Verified'
       };
     })
     .filter(Boolean);

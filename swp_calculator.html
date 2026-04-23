@@ -953,8 +953,7 @@ async function fetchFundSinceInception(isAuto = false) {
 
   try {
     const backendUrl = apiUrl(`/api/funds/${code}/history`);
-    const directUrl = `https://api.mfapi.in/mf/${code}`;
-    const payload = await fetchJSONWithFallback(backendUrl, directUrl);
+    const payload = await fetchWithRetry(backendUrl, {}, 2, 15000);
 
     let rows = [];
     if (payload.navData && typeof payload.navData === 'object') {
@@ -1039,10 +1038,21 @@ async function fetchWithRetry(url, options = {}, retries = 2, timeoutMs = 8000) 
   let lastError = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
+    let removeAbortForwarder = null;
+    if (options.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        const onAbort = () => controller.abort();
+        options.signal.addEventListener('abort', onAbort, { once: true });
+        removeAbortForwarder = () => options.signal.removeEventListener('abort', onAbort);
+      }
+    }
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timer);
+      if (removeAbortForwarder) removeAbortForwarder();
       const bodyText = await res.text();
       if (!res.ok) {
         const preview = bodyText.trim().slice(0, 120);
@@ -1061,6 +1071,7 @@ async function fetchWithRetry(url, options = {}, retries = 2, timeoutMs = 8000) 
       }
     } catch (err) {
       clearTimeout(timer);
+      if (removeAbortForwarder) removeAbortForwarder();
       lastError = err;
       if (attempt < retries) {
         await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
@@ -1069,18 +1080,6 @@ async function fetchWithRetry(url, options = {}, retries = 2, timeoutMs = 8000) 
     }
   }
   throw lastError || new Error('Request failed');
-}
-
-async function fetchJSONWithFallback(primaryUrl, fallbackUrl) {
-  try {
-    return await fetchWithRetry(primaryUrl, {}, 2, 8000);
-  } catch (primaryError) {
-    try {
-      return await fetchWithRetry(fallbackUrl, {}, 1, 8000);
-    } catch (fallbackError) {
-      throw new Error(`Live data request failed (${primaryError.message}). Fallback also failed (${fallbackError.message}).`);
-    }
-  }
 }
 
 function handleSchemeCodeAutoFetch() {

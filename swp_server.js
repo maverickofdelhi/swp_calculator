@@ -258,12 +258,8 @@ app.get('/api/funds/by-amc', async (req, res) => {
     }
 
     if (!catalogIndex.byAmc.size) {
-      if (!q) {
-        warmFundCatalog().catch(() => null);
-        return res.json({ results: [], cached: false, source: 'mfapi-search', warming: true });
-      }
-
-      const liveFunds = await loadFundsFromLiveSearch(q);
+      const liveQuery = q || deriveLiveSearchSeedFromAmc(amc);
+      const liveFunds = await loadFundsFromLiveSearch(liveQuery);
       const amcQuery = amc.toLowerCase();
       const funds = liveFunds
         .filter((fund) => String(fund.amcName || '').toLowerCase() === amcQuery)
@@ -594,6 +590,17 @@ async function loadFundsFromLiveSearch(query) {
       };
     })
     .filter(Boolean);
+}
+
+function deriveLiveSearchSeedFromAmc(amcName) {
+  const normalized = String(amcName || '')
+    .toLowerCase()
+    .replace(/\bmutual\s+fund\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const firstToken = normalized.split(' ')[0] || '';
+  return firstToken.length >= 2 ? firstToken : normalized;
 }
 
 function warmFundCatalog() {

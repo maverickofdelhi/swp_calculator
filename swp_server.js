@@ -204,11 +204,7 @@ app.get('/api/funds/amcs', async (req, res) => {
 
     if (!catalogIndex.amcRows.length) {
       warmFundCatalog().catch(() => null);
-      const fallback = AMC_HOUSES
-        .map((amcName) => ({ amcName, fundCount: null }))
-        .filter((row) => !q || row.amcName.toLowerCase().includes(q))
-        .slice(0, 60);
-      return res.json({ results: fallback, cached: false, warming: true });
+      return res.json({ results: [], cached: false, warming: true, source: 'mfapi' });
     }
 
     const results = catalogIndex.amcRows
@@ -223,7 +219,7 @@ app.get('/api/funds/amcs', async (req, res) => {
       .slice(0, 60);
 
     setInCache(cache.search, cacheKey, results);
-    res.json({ results, cached: false });
+    res.json({ results, cached: false, source: 'mfapi' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load AMC list', details: err.message });
   }
@@ -240,7 +236,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
     const cacheKey = `byamc:${amc.toLowerCase()}::${q}`;
     const cached = getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
     if (cached) {
-      return res.json({ results: cached, cached: true });
+      return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
 
     if (!catalogIndex.byAmc.size) {
@@ -263,7 +259,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
       .map(({ score, searchText, ...fund }) => fund);
 
     setInCache(cache.search, cacheKey, funds);
-    res.json({ results: funds, cached: false });
+    res.json({ results: funds, cached: false, source: 'mfapi' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load funds by AMC', details: err.message });
   }
@@ -277,8 +273,14 @@ app.get('/api/funds/:code/history', async (req, res) => {
       return res.status(400).json({ error: 'Invalid scheme code' });
     }
 
+    const todayIST = getDateKeyInTimeZone('Asia/Kolkata');
+    const cached = getFromCache(cache.history, code, CACHE_TTL_MS.history, { dayKey: todayIST });
+    if (cached) {
+      return res.json({ ...cached, cached: true, source: 'mfapi' });
+    }
+
     const result = await loadFundHistory(code);
-    res.json({ ...result, cached: false });
+    res.json({ ...result, cached: false, source: 'mfapi' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch fund history', details: err.message });
   }

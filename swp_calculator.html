@@ -848,7 +848,7 @@ async function fetchFundSinceInception(isAuto = false) {
   try {
     const backendUrl = `/api/funds/${code}/history`;
     const directUrl = `https://api.mfapi.in/mf/${code}`;
-    const payload = await fetchJSONWithFallback(directUrl, backendUrl);
+    const payload = await fetchJSONWithFallback(backendUrl, directUrl);
 
     let rows = [];
     if (payload.navData && typeof payload.navData === 'object') {
@@ -909,11 +909,15 @@ async function fetchFundSinceInception(isAuto = false) {
       const annualizedText = payload.returns.annualizedReturnPercent !== null && payload.returns.annualizedReturnPercent !== undefined
         ? `${payload.returns.annualizedReturnPercent.toFixed(2)}%`
         : 'N/A';
-      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Return ${totalReturnText} · Annualized ${annualizedText}`;
-      liveStatus.textContent = `${selectedFundMeta.schemeName} loaded with ${allDates.length} live NAV points.`;
+      const cacheTag = payload.cached ? 'cached today' : 'fresh fetch';
+      const sourceTag = payload.source ? payload.source : 'live';
+      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Return ${totalReturnText} · Annualized ${annualizedText} · Source: ${sourceTag} (${cacheTag})`;
+      liveStatus.textContent = `${selectedFundMeta.schemeName} loaded with ${allDates.length} live NAV points (${sourceTag}, ${cacheTag}).`;
     } else {
-      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points`;
-      liveStatus.textContent = `${selectedFundMeta.schemeName} loaded with ${allDates.length} live NAV points.`;
+      const cacheTag = payload.cached ? 'cached today' : 'fresh fetch';
+      const sourceTag = payload.source ? payload.source : 'live';
+      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Source: ${sourceTag} (${cacheTag})`;
+      liveStatus.textContent = `${selectedFundMeta.schemeName} loaded with ${allDates.length} live NAV points (${sourceTag}, ${cacheTag}).`;
     }
   } catch (_) {
     showError('Could not load live fund data. Check the scheme code, network, and try again.');

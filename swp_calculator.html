@@ -114,7 +114,7 @@
 
   .api-row {
     display: grid;
-    grid-template-columns: 1.3fr 0.9fr;
+    grid-template-columns: 1fr 1fr 0.9fr;
     gap: 10px;
     align-items: flex-end;
     margin-bottom: 12px;
@@ -452,8 +452,13 @@
 
     <div class="api-row">
       <div class="field">
-        <label>Search Fund (MFAPI)</label>
-        <input type="text" id="fundSearchApi" placeholder="Type fund name (e.g. HDFC, SBI, Axis)" autocomplete="off">
+        <label>Step 1: Select AMC</label>
+        <input type="text" id="amcSearchApi" placeholder="Type AMC name (e.g. HDFC, SBI, Axis)" autocomplete="off">
+        <div id="amcSuggestions" class="search-suggestions hidden"></div>
+      </div>
+      <div class="field">
+        <label>Step 2: Select Fund (Direct/Regular Growth)</label>
+        <input type="text" id="fundSearchApi" placeholder="Select AMC first, then type fund name" autocomplete="off" disabled>
         <div id="fundSuggestions" class="search-suggestions hidden"></div>
       </div>
       <div class="field">
@@ -461,7 +466,7 @@
         <input type="number" id="schemeCode" placeholder="e.g. 100033" min="1">
       </div>
     </div>
-    <div id="apiFundMeta">Select a mutual fund and the app will fetch live data automatically.</div>
+    <div id="apiFundMeta">Select AMC first, then pick a Direct/Regular Growth fund. History loads automatically.</div>
 
     <div id="navLiveStatus" class="status-msg info">Choose a fund to auto-load live history.</div>
   </div>
@@ -515,13 +520,60 @@ let autoFetchDebounce = null;
 let lastFetchedSchemeCode = '';
 let lastCalculation = null;
 let trendChart = null;
+let selectedAmcName = '';
+let lastAmcSuggestions = [];
 let lastFundSuggestions = [];
 const schemeLookup = new Map();
 
-function hideFundSuggestions() {
-  const box = document.getElementById('fundSuggestions');
+function hideSuggestions(elementId) {
+  const box = document.getElementById(elementId);
   box.classList.add('hidden');
   box.innerHTML = '';
+}
+
+function hideAmcSuggestions() {
+  hideSuggestions('amcSuggestions');
+}
+
+function hideFundSuggestions() {
+  hideSuggestions('fundSuggestions');
+}
+
+function renderAmcSuggestions(results) {
+  const box = document.getElementById('amcSuggestions');
+  lastAmcSuggestions = Array.isArray(results) ? results : [];
+
+  if (!lastAmcSuggestions.length) {
+    box.innerHTML = '<div class="suggestion-empty">No AMC found.</div>';
+    box.classList.remove('hidden');
+    return;
+  }
+
+  box.innerHTML = lastAmcSuggestions
+    .map((amc, index) => `<button type="button" class="suggestion-item" data-index="${index}">${String(amc.amcName).replace(/"/g, '&quot;')} (${amc.fundCount} funds)</button>`)
+    .join('');
+  box.classList.remove('hidden');
+}
+
+function clearFundSelectionForAmc() {
+  document.getElementById('fundSearchApi').value = '';
+  document.getElementById('schemeCode').value = '';
+  lastFundSuggestions = [];
+  hideFundSuggestions();
+}
+
+function selectAmcSuggestionByIndex(index) {
+  const amc = lastAmcSuggestions[index];
+  if (!amc) return;
+
+  selectedAmcName = amc.amcName;
+  document.getElementById('amcSearchApi').value = amc.amcName;
+  const fundInput = document.getElementById('fundSearchApi');
+  fundInput.disabled = false;
+  fundInput.placeholder = `Type fund under ${amc.amcName}`;
+  clearFundSelectionForAmc();
+  document.getElementById('apiFundMeta').textContent = `AMC selected: ${amc.amcName}. Now choose a Direct/Regular Growth fund.`;
+  hideAmcSuggestions();
 }
 
 function renderFundSuggestions(results) {
@@ -639,9 +691,33 @@ function parseMFAPIDate(dateStr) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+async function searchAMCsFromAPI() {
+  const input = document.getElementById('amcSearchApi');
+  const query = (input.value || '').trim();
+
+  if (query.length < 2) {
+    hideAmcSuggestions();
+    return;
+  }
+
+  try {
+    const data = await fetchWithRetry(`/api/funds/amcs?q=${encodeURIComponent(query)}`, {}, 1, 8000);
+    const results = Array.isArray(data.results) ? data.results.slice(0, 40) : [];
+    renderAmcSuggestions(results);
+  } catch (_) {
+    hideAmcSuggestions();
+  }
+}
+
 async function searchFundsFromAPI() {
   const input = document.getElementById('fundSearchApi');
   const query = (input.value || '').trim();
+
+  if (!selectedAmcName) {
+    hideFundSuggestions();
+    document.getElementById('apiFundMeta').textContent = 'Please select AMC first.';
+    return;
+  }
 
   if (query.length < 2) {
     hideFundSuggestions();
@@ -649,12 +725,11 @@ async function searchFundsFromAPI() {
   }
 
   try {
-    const backendUrl = `/api/funds/search?q=${encodeURIComponent(query)}`;
-    const directUrl = `https://api.mfapi.in/mf/search?q=${encodeURIComponent(query)}`;
-    const data = await fetchJSONWithFallback(backendUrl, directUrl);
+    const backendUrl = `/api/funds/by-amc?amc=${encodeURIComponent(selectedAmcName)}&q=${encodeURIComponent(query)}`;
+    const data = await fetchWithRetry(backendUrl, {}, 1, 8000);
     const topRaw = Array.isArray(data.results)
       ? data.results
-      : (Array.isArray(data) ? data : []);
+      : [];
     const top = topRaw.slice(0, 25).map((fund) => {
       const schemeCode = String(fund.schemeCode || '').trim();
       const schemeName = String(fund.schemeName || '').trim();
@@ -676,6 +751,11 @@ async function searchFundsFromAPI() {
 }
 
 function handleFundSearchInput() {
+  if (!selectedAmcName) {
+    document.getElementById('apiFundMeta').textContent = 'Please select AMC first.';
+    return;
+  }
+
   if (searchDebounce) clearTimeout(searchDebounce);
   searchDebounce = setTimeout(searchFundsFromAPI, 350);
 
@@ -700,6 +780,21 @@ function handleFundSearchSelection() {
       : `Selected scheme code: ${parsed.code}. Loading live data...`;
     hideFundSuggestions();
     fetchFundSinceInception(true);
+  }
+}
+
+function handleAmcSearchInput() {
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(searchAMCsFromAPI, 300);
+
+  const typed = document.getElementById('amcSearchApi').value.trim();
+  if (!typed || (selectedAmcName && typed === selectedAmcName)) return;
+
+  if (selectedAmcName && typed !== selectedAmcName) {
+    selectedAmcName = '';
+    document.getElementById('fundSearchApi').disabled = true;
+    document.getElementById('fundSearchApi').placeholder = 'Select AMC first, then type fund name';
+    clearFundSelectionForAmc();
   }
 }
 
@@ -1406,6 +1501,24 @@ function downloadFile(content, filename, mimeType) {
   link.remove();
   URL.revokeObjectURL(url);
 }
+
+document.getElementById('amcSearchApi').addEventListener('input', handleAmcSearchInput);
+document.getElementById('amcSearchApi').addEventListener('blur', () => {
+  setTimeout(hideAmcSuggestions, 140);
+});
+document.getElementById('amcSearchApi').addEventListener('focus', () => {
+  if (lastAmcSuggestions.length) {
+    renderAmcSuggestions(lastAmcSuggestions);
+  }
+});
+document.getElementById('amcSuggestions').addEventListener('click', (event) => {
+  const btn = event.target.closest('button[data-index]');
+  if (!btn) return;
+  const index = Number(btn.dataset.index);
+  if (Number.isInteger(index)) {
+    selectAmcSuggestionByIndex(index);
+  }
+});
 
 document.getElementById('fundSearchApi').addEventListener('input', handleFundSearchInput);
 document.getElementById('fundSearchApi').addEventListener('change', handleFundSearchSelection);

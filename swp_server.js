@@ -187,6 +187,81 @@ app.get('/api/funds/search', async (req, res) => {
   }
 });
 
+app.get('/api/funds/amcs', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim().toLowerCase();
+    const cacheKey = `amcs:${q}`;
+    const cached = getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
+    if (cached) {
+      return res.json({ results: cached, cached: true });
+    }
+
+    const catalog = await loadFundCatalog();
+    const amcToCount = new Map();
+    for (const fund of catalog) {
+      const amc = String(fund.amcName || '').trim();
+      if (!amc) continue;
+      amcToCount.set(amc, (amcToCount.get(amc) || 0) + 1);
+    }
+
+    const results = Array.from(amcToCount.entries())
+      .map(([amcName, fundCount]) => ({ amcName, fundCount }))
+      .filter((row) => !q || row.amcName.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aStarts = q && a.amcName.toLowerCase().startsWith(q) ? 1 : 0;
+        const bStarts = q && b.amcName.toLowerCase().startsWith(q) ? 1 : 0;
+        if (aStarts !== bStarts) return bStarts - aStarts;
+        if (a.fundCount !== b.fundCount) return b.fundCount - a.fundCount;
+        return a.amcName.localeCompare(b.amcName);
+      })
+      .slice(0, 60);
+
+    setInCache(cache.search, cacheKey, results);
+    res.json({ results, cached: false });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load AMC list', details: err.message });
+  }
+});
+
+app.get('/api/funds/by-amc', async (req, res) => {
+  try {
+    const amc = (req.query.amc || '').toString().trim();
+    const q = (req.query.q || '').toString().trim().toLowerCase();
+    if (amc.length < 2) {
+      return res.status(400).json({ error: 'amc query parameter is required' });
+    }
+
+    const cacheKey = `byamc:${amc.toLowerCase()}::${q}`;
+    const cached = getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
+    if (cached) {
+      return res.json({ results: cached, cached: true });
+    }
+
+    const catalog = await loadFundCatalog();
+    const amcQuery = amc.toLowerCase();
+    const funds = catalog
+      .filter((fund) => fund.amcName.toLowerCase() === amcQuery)
+      .filter((fund) => !q || fund.schemeName.toLowerCase().includes(q))
+      .map((fund) => {
+        const scheme = fund.schemeName.toLowerCase();
+        let score = 0;
+        if (q && scheme.startsWith(q)) score += 20;
+        if (q && scheme.includes(q)) score += 10;
+        if (/\bindex\b|\belss\b|\bflexi\b|\blarge\b|\bmid\b|\bsmall\b/.test(scheme)) score += 4;
+        if (fund.planType === 'Direct') score += 1;
+        return { ...fund, score };
+      })
+      .sort((a, b) => b.score - a.score || a.schemeName.localeCompare(b.schemeName))
+      .slice(0, 60)
+      .map(({ score, searchText, ...fund }) => fund);
+
+    setInCache(cache.search, cacheKey, funds);
+    res.json({ results: funds, cached: false });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load funds by AMC', details: err.message });
+  }
+});
+
 app.get('/api/funds/:code/history', async (req, res) => {
   try {
     const code = String(req.params.code || '').trim();

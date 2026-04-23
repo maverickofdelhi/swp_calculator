@@ -476,6 +476,7 @@ let autoFetchDebounce = null;
 let lastFetchedSchemeCode = '';
 let lastCalculation = null;
 let trendChart = null;
+const schemeLookup = new Map();
 
 function setStatusMessage(message, kind = 'info') {
   const el = document.getElementById('statusMsg');
@@ -582,6 +583,11 @@ async function searchFundsFromAPI() {
     const top = Array.isArray(data.results)
       ? data.results.slice(0, 20)
       : (Array.isArray(data) ? data.slice(0, 20) : []);
+    for (const fund of top) {
+      if (fund && fund.schemeCode) {
+        schemeLookup.set(String(fund.schemeCode).trim(), String(fund.schemeName || '').trim());
+      }
+    }
     datalist.innerHTML = top
       .map(f => `<option value="${String(f.schemeName).replace(/\"/g, '&quot;')} | ${f.schemeCode}"></option>`)
       .join('');
@@ -595,26 +601,42 @@ function handleFundSearchInput() {
   searchDebounce = setTimeout(searchFundsFromAPI, 350);
 
   const value = document.getElementById('fundSearchApi').value;
-  const parts = value.split('|');
-  if (parts.length >= 2) {
-    const code = parts[parts.length - 1].trim();
-    if (/^\d+$/.test(code)) {
-      document.getElementById('schemeCode').value = code;
-      scheduleAutoFetch();
-    }
+  const parsed = extractSchemeSelection(value);
+  if (parsed.code) {
+    document.getElementById('schemeCode').value = parsed.code;
+    document.getElementById('apiFundMeta').textContent = parsed.name
+      ? `Selected: ${parsed.name} (Code: ${parsed.code}). Loading live data...`
+      : `Selected scheme code: ${parsed.code}. Loading live data...`;
+    scheduleAutoFetch();
   }
 }
 
 function handleFundSearchSelection() {
   const value = document.getElementById('fundSearchApi').value;
-  const parts = value.split('|');
-  if (parts.length >= 2) {
-    const code = parts[parts.length - 1].trim();
-    if (/^\d+$/.test(code)) {
-      document.getElementById('schemeCode').value = code;
-      fetchFundSinceInception(true);
-    }
+  const parsed = extractSchemeSelection(value);
+  if (parsed.code) {
+    document.getElementById('schemeCode').value = parsed.code;
+    document.getElementById('apiFundMeta').textContent = parsed.name
+      ? `Selected: ${parsed.name} (Code: ${parsed.code}). Loading live data...`
+      : `Selected scheme code: ${parsed.code}. Loading live data...`;
+    fetchFundSinceInception(true);
   }
+}
+
+function extractSchemeSelection(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(.*)\|\s*(\d+)\s*$/);
+  if (match) {
+    return { name: match[1].trim(), code: match[2].trim() };
+  }
+
+  const codeMatch = text.match(/(\d+)\s*$/);
+  if (codeMatch) {
+    const code = codeMatch[1].trim();
+    return { name: schemeLookup.get(code) || text.replace(codeMatch[0], '').trim(), code };
+  }
+
+  return { name: text, code: '' };
 }
 
 function scheduleAutoFetch() {
@@ -641,9 +663,12 @@ async function fetchFundSinceInception(isAuto = false) {
   }
 
   const apiMeta = document.getElementById('apiFundMeta');
-  apiMeta.textContent = isAuto
-    ? 'Auto-fetching live fund data...'
-    : 'Fetching live fund data...';
+  const requestedName = schemeLookup.get(code) || (selectedFundMeta && selectedFundMeta.schemeName) || '';
+  apiMeta.textContent = requestedName
+    ? `${isAuto ? 'Auto-fetching' : 'Fetching'} live fund data for ${requestedName} (Code: ${code})...`
+    : isAuto
+      ? 'Auto-fetching live fund data...'
+      : 'Fetching live fund data...';
   document.getElementById('errorMsg').classList.add('hidden');
 
   try {
@@ -683,7 +708,7 @@ async function fetchFundSinceInception(isAuto = false) {
     navData = rebuilt;
     selectedFundMeta = {
       schemeCode: code,
-      schemeName: payload.schemeName || (payload.meta && payload.meta.scheme_name) || `Scheme ${code}`,
+      schemeName: payload.schemeName || (payload.meta && payload.meta.scheme_name) || requestedName || `Scheme ${code}`,
       priceHistory: payload.priceHistory || [],
       returns: payload.returns || null
     };
@@ -711,10 +736,14 @@ async function fetchFundSinceInception(isAuto = false) {
         ? `${payload.returns.annualizedReturnPercent.toFixed(2)}%`
         : 'N/A';
       apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Return ${totalReturnText} · Annualized ${annualizedText}`;
+    } else {
+      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points`;
     }
   } catch (_) {
     showError('Could not load live fund data. Check the scheme code, network, and try again.');
-    apiMeta.textContent = 'Live data fetch failed. Retry or choose another fund.';
+    apiMeta.textContent = requestedName
+      ? `Live data fetch failed for ${requestedName} (Code: ${code}). Retry or choose another fund.`
+      : `Live data fetch failed for Code: ${code}. Retry or choose another fund.`;
   }
 }
 

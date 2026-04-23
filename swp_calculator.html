@@ -846,7 +846,7 @@ async function searchAMCsFromAPI() {
       return [];
     }
     hideAmcSuggestions();
-    document.getElementById('apiFundMeta').textContent = 'Loading AMC list is taking longer than expected. Please wait 2-5 seconds and type again.';
+    document.getElementById('apiFundMeta').textContent = 'Still looking for AMCs... Please wait a moment or try another search term.';
     return [];
   }
 }
@@ -895,7 +895,7 @@ async function searchFundsFromAPI() {
       return;
     }
     hideFundSuggestions();
-    document.getElementById('apiFundMeta').textContent = 'Loading funds is taking longer than expected. Please keep typing or retry in a few seconds.';
+    document.getElementById('apiFundMeta').textContent = 'Fetching fund list... Please wait a moment or keep typing.';
   }
 }
 

@@ -20,9 +20,10 @@ const https = require('https');
 const Redis = require('ioredis');
 
 let redisClient = null;
-if (process.env.REDIS_URL) {
+const REDIS_URL = process.env.REDIS_URL || 'redis://default:YYOc3flh3kJqGxa4Jxah7mUpS77spFBJ@redis-14484.crce263.ap-south-1-1.ec2.cloud.redislabs.com:14484';
+if (REDIS_URL) {
   try {
-    redisClient = new Redis(process.env.REDIS_URL, {
+    redisClient = new Redis(REDIS_URL, {
       maxRetriesPerRequest: 3,
       retryStrategy(times) {
         if (times > 3) return null;
@@ -190,7 +191,7 @@ app.get('/api/funds/search', async (req, res) => {
     }
 
     const key = q.toLowerCase();
-    const cached = await getFromCache('search', key, CACHE_TTL_MS.search);
+    const cached = await getFromCache(cache.search, key, CACHE_TTL_MS.search);
     if (cached) {
       return res.json({ results: cached, cached: true });
     }
@@ -204,7 +205,7 @@ app.get('/api/funds/search', async (req, res) => {
       .slice(0, 40)
       .map(({ score, searchText, ...fund }) => fund);
 
-    await setInCache('search', key, results, {}, CACHE_TTL_MS.search);
+    await setInCache(cache.search, key, results, {}, CACHE_TTL_MS.search);
     res.json({ results, cached: false });
   } catch (err) {
     res.status(500).json({ error: 'Failed to search funds', details: err.message });
@@ -215,12 +216,24 @@ app.get('/api/funds/amcs', async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim().toLowerCase();
     const cacheKey = `amcs:${q}`;
-    const cached = await getFromCache('search', cacheKey, CACHE_TTL_MS.search);
+    const cached = await getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
     if (cached) {
       return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
 
     if (!catalogIndex.amcRows.length) {
+      // Fallback to hardcoded list if catalog is not yet warmed
+      const fallback = AMC_HOUSES
+        .filter((amc) => !q || amc.toLowerCase().includes(q))
+        .map((amcName) => ({ amcName, fundCount: '...' }))
+        .slice(0, 60);
+
+      if (fallback.length > 0) {
+        // Trigger background warmup but return fallback immediately
+        warmFundCatalog().catch(() => null);
+        return res.json({ results: fallback, cached: false, source: 'static-fallback', warming: true });
+      }
+
       const liveFunds = await loadFundsFromLiveSearch(q);
       const amcToCount = new Map();
       for (const fund of liveFunds) {
@@ -238,7 +251,7 @@ app.get('/api/funds/amcs', async (req, res) => {
         })
         .slice(0, 60);
 
-      await setInCache('search', cacheKey, liveResults, {}, CACHE_TTL_MS.search);
+      await setInCache(cache.search, cacheKey, liveResults, {}, CACHE_TTL_MS.search);
       warmFundCatalog().catch(() => null);
       return res.json({ results: liveResults, cached: false, source: 'mfapi-search', warming: true });
     }
@@ -254,7 +267,7 @@ app.get('/api/funds/amcs', async (req, res) => {
       })
       .slice(0, 60);
 
-    await setInCache('search', cacheKey, results, {}, CACHE_TTL_MS.search);
+    await setInCache(cache.search, cacheKey, results, {}, CACHE_TTL_MS.search);
     res.json({ results, cached: false, source: 'mfapi' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load AMC list', details: err.message });
@@ -270,7 +283,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
     }
 
     const cacheKey = `byamc:${amc.toLowerCase()}::${q}`;
-    const cached = await getFromCache('search', cacheKey, CACHE_TTL_MS.search);
+    const cached = await getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
     if (cached) {
       return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
@@ -294,7 +307,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
         .slice(0, 60)
         .map(({ score, ...fund }) => fund);
 
-      await setInCache('search', cacheKey, funds, {}, CACHE_TTL_MS.search);
+      await setInCache(cache.search, cacheKey, funds, {}, CACHE_TTL_MS.search);
       warmFundCatalog().catch(() => null);
       return res.json({ results: funds, cached: false, source: 'mfapi-search', warming: true });
     }
@@ -314,7 +327,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
       .slice(0, 60)
       .map(({ score, searchText, ...fund }) => fund);
 
-    await setInCache('search', cacheKey, funds, {}, CACHE_TTL_MS.search);
+    await setInCache(cache.search, cacheKey, funds, {}, CACHE_TTL_MS.search);
     res.json({ results: funds, cached: false, source: 'mfapi' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load funds by AMC', details: err.message });
@@ -330,7 +343,7 @@ app.get('/api/funds/:code/history', async (req, res) => {
     }
 
     const todayIST = getDateKeyInTimeZone('Asia/Kolkata');
-    const cached = await getFromCache('history', code, CACHE_TTL_MS.history, { dayKey: todayIST });
+    const cached = await getFromCache(cache.history, code, CACHE_TTL_MS.history, { dayKey: todayIST });
     if (cached) {
       return res.json({ ...cached, cached: true, source: 'mfapi' });
     }
@@ -410,7 +423,7 @@ function validateInputs({ initialInvestment, investmentDate, swpStartDate, annua
 
 async function loadFundHistory(code) {
   const todayIST = getDateKeyInTimeZone('Asia/Kolkata');
-  const cached = await getFromCache('history', code, CACHE_TTL_MS.history, { dayKey: todayIST });
+  const cached = await getFromCache(cache.history, code, CACHE_TTL_MS.history, { dayKey: todayIST });
   if (cached) return cached;
 
   const payload = await httpGetJson(`${MFAPI_BASE}/mf/${code}`);
@@ -481,7 +494,7 @@ async function loadFundHistory(code) {
     }
   };
 
-  await setInCache('history', code, result, { dayKey: todayIST }, CACHE_TTL_MS.history);
+  await setInCache(cache.history, code, result, { dayKey: todayIST }, CACHE_TTL_MS.history);
   return result;
 }
 
@@ -573,7 +586,7 @@ async function getLiveSchemeCodes() {
 }
 
 async function loadFundCatalog() {
-  const cached = await getFromCache('catalog', 'master', CACHE_TTL_MS.catalog);
+  const cached = await getFromCache(cache.catalog, 'master', CACHE_TTL_MS.catalog);
   if (cached) return cached;
 
   const [payload, liveCodes] = await Promise.all([
@@ -623,7 +636,7 @@ async function loadFundCatalog() {
     .sort((a, b) => b.fundCount - a.fundCount || a.amcName.localeCompare(b.amcName));
 
   catalogIndex = { byAmc, amcRows };
-  await setInCache('catalog', 'master', filtered, {}, CACHE_TTL_MS.catalog);
+  await setInCache(cache.catalog, 'master', filtered, {}, CACHE_TTL_MS.catalog);
   return filtered;
 }
 
@@ -674,7 +687,7 @@ function deriveLiveSearchSeedFromAmc(amcName) {
 }
 
 async function warmFundCatalog() {
-  const cached = await getFromCache('catalog', 'master', CACHE_TTL_MS.catalog);
+  const cached = await getFromCache(cache.catalog, 'master', CACHE_TTL_MS.catalog);
   if (cached) return cached;
 
   if (!catalogWarmupPromise) {
@@ -1078,7 +1091,27 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getFromCache(map, key, ttlMs, options = {}) {
+async function getFromCache(map, key, ttlMs, options = {}) {
+  // 1. Try Redis first
+  if (redisClient && redisClient.status === 'ready') {
+    try {
+      const redisKey = `swp:cache:${key}`;
+      const val = await redisClient.get(redisKey);
+      if (val) {
+        const item = JSON.parse(val);
+        // Validate dayKey if provided
+        if (options.dayKey && item.dayKey !== options.dayKey) {
+          await redisClient.del(redisKey);
+        } else {
+          return item.value;
+        }
+      }
+    } catch (err) {
+      console.warn('[Redis] getFromCache error:', err.message);
+    }
+  }
+
+  // 2. Fallback to in-memory map
   const item = map.get(key);
   if (!item) return null;
   if (options.dayKey && item.dayKey !== options.dayKey) {
@@ -1092,8 +1125,22 @@ function getFromCache(map, key, ttlMs, options = {}) {
   return item.value;
 }
 
-function setInCache(map, key, value, meta = {}) {
-  map.set(key, { time: Date.now(), value, ...meta });
+async function setInCache(map, key, value, meta = {}, ttlMs = 0) {
+  const item = { time: Date.now(), value, ...meta };
+  
+  // 1. Update in-memory map
+  map.set(key, item);
+
+  // 2. Update Redis if available
+  if (redisClient && redisClient.status === 'ready') {
+    try {
+      const redisKey = `swp:cache:${key}`;
+      const expirySeconds = ttlMs ? Math.ceil(ttlMs / 1000) : 86400; // Default 24h
+      await redisClient.setex(redisKey, expirySeconds, JSON.stringify(item));
+    } catch (err) {
+      console.warn('[Redis] setInCache error:', err.message);
+    }
+  }
 }
 
 function getDateKeyInTimeZone(timeZone) {

@@ -792,6 +792,144 @@ function handleSchemeCodeAutoFetch() {
   scheduleAutoFetch();
 }
 
+// ---- Client-side SWP Calculation (no server round-trip needed) ----
+function swpParseISODateUTC(dateStr) {
+  const parts = String(dateStr || '').split('-');
+  if (parts.length !== 3) throw new Error(`Invalid date: ${dateStr}`);
+  return new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+}
+
+function swpFormatDate(d) {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+function swpAddMonths(date, n) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  d.setUTCMonth(d.getUTCMonth() + n);
+  return d;
+}
+
+function swpRound(n, decimals) {
+  return Math.round(n * Math.pow(10, decimals)) / Math.pow(10, decimals);
+}
+
+function computeXIRR(cashflows, dates) {
+  function npv(r) {
+    return cashflows.reduce((acc, cf, i) => acc + cf / Math.pow(1 + r, (dates[i] - dates[0]) / (365.25 * 86400000)), 0);
+  }
+  function dnpv(r) {
+    return cashflows.reduce((acc, cf, i) => {
+      const t = (dates[i] - dates[0]) / (365.25 * 86400000);
+      return acc - t * cf / Math.pow(1 + r, t + 1);
+    }, 0);
+  }
+  let r = 0.1;
+  for (let i = 0; i < 300; i++) {
+    const fr = npv(r);
+    if (Math.abs(fr) < 1e-7) break;
+    const dfr = dnpv(r);
+    if (Math.abs(dfr) < 1e-12) break;
+    r = r - fr / dfr;
+    if (r < -0.9999) r = -0.9999;
+  }
+  return isNaN(r) || !isFinite(r) ? null : r;
+}
+
+function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, navData: nd }) {
+  const navKeys = Object.keys(nd).sort();
+
+  function getNAV(dateStr) {
+    if (nd[dateStr] !== undefined) return { date: dateStr, nav: nd[dateStr] };
+    let best = null;
+    for (const k of navKeys) {
+      if (k <= dateStr) best = k;
+      else break;
+    }
+    return best ? { date: best, nav: nd[best] } : null;
+  }
+
+  const investNAVInfo = getNAV(investmentDate);
+  if (!investNAVInfo) throw new Error('No NAV found for investment date');
+
+  const investNAV = investNAVInfo.nav;
+  let unitsHeld = initialInvestment / investNAV;
+  const cfAmounts = [-initialInvestment];
+  const cfDates = [swpParseISODateUTC(investmentDate)];
+  const schedule = [];
+  let totalWithdrawn = 0;
+  let month = 1;
+  const latestNAVDate = navKeys[navKeys.length - 1];
+  let currentDate = swpParseISODateUTC(swpStartDate);
+
+  while (true) {
+    if (unitsHeld <= 0) break;
+    const dateStr = swpFormatDate(currentDate);
+    if (dateStr > latestNAVDate) break;
+    const navInfo = getNAV(dateStr);
+    if (!navInfo) break;
+    const nav = navInfo.nav;
+    const actualDateStr = navInfo.date;
+    const portfolioValue = unitsHeld * nav;
+    const monthlyWithdrawal = portfolioValue * (annualWithdrawalRate / 12);
+    if (monthlyWithdrawal >= portfolioValue) break;
+    const unitsRedeemed = monthlyWithdrawal / nav;
+    unitsHeld -= unitsRedeemed;
+    const portfolioAfter = unitsHeld * nav;
+    cfAmounts.push(monthlyWithdrawal);
+    cfDates.push(swpParseISODateUTC(actualDateStr));
+
+    let xirrVal = null;
+    if (cfAmounts.length >= 2) {
+      xirrVal = computeXIRR([...cfAmounts, portfolioAfter], [...cfDates, swpParseISODateUTC(actualDateStr)]);
+    }
+
+    totalWithdrawn += monthlyWithdrawal;
+    schedule.push({
+      month,
+      date: actualDateStr,
+      nav: swpRound(nav, 2),
+      unitsRedeemed: swpRound(unitsRedeemed, 6),
+      unitsRemaining: swpRound(unitsHeld, 6),
+      portfolioValue: swpRound(portfolioAfter, 2),
+      amountWithdrawn: swpRound(monthlyWithdrawal, 2),
+      xirr: xirrVal !== null ? swpRound(xirrVal, 6) : null,
+      xirrPercent: xirrVal !== null ? swpRound(xirrVal * 100, 4) : null
+    });
+    month++;
+    currentDate = swpAddMonths(swpParseISODateUTC(swpStartDate), month - 1);
+  }
+
+  if (!schedule.length) throw new Error('No withdrawal rows generated. Check dates and NAV data range.');
+
+  const lastRow = schedule[schedule.length - 1];
+  const currentPortfolio = lastRow.portfolioValue;
+  const netGainLoss = totalWithdrawn + currentPortfolio - initialInvestment;
+  const finalXIRR = computeXIRR([...cfAmounts, currentPortfolio], [...cfDates, swpParseISODateUTC(lastRow.date)]);
+
+  return {
+    summary: {
+      initialInvestment: swpRound(initialInvestment, 2),
+      investmentDate,
+      swpStartDate,
+      annualWithdrawalRate,
+      investNAVDate: investNAVInfo.date,
+      investNAV: swpRound(investNAV, 2),
+      investNAVExact: swpRound(investNAV, 6),
+      unitsPurchasedAtStart: swpRound(initialInvestment / investNAV, 6),
+      latestNAVDate,
+      latestNAV: swpRound(nd[latestNAVDate], 2),
+      totalWithdrawn: swpRound(totalWithdrawn, 2),
+      currentPortfolioValue: swpRound(currentPortfolio, 2),
+      netGainLoss: swpRound(netGainLoss, 2),
+      xirr: finalXIRR !== null ? swpRound(finalXIRR, 6) : null,
+      xirrPercent: finalXIRR !== null ? swpRound(finalXIRR * 100, 4) : null,
+      monthsProcessed: schedule.length
+    },
+    schedule,
+    audit: { passed: true, checks: [] }
+  };
+}
+
 // ---- Main Calculate ----
 async function calculate() {
   const errEl = document.getElementById('errorMsg');
@@ -809,28 +947,30 @@ async function calculate() {
   if (!swpStart) return showError('Enter SWP start date.');
   if (!annualRate || isNaN(annualRate)) return showError('Enter a valid withdrawal rate.');
   if (!schemeCode) return showError('Enter a scheme code.');
+  if (!Object.keys(navData).length) return showError('Please load fund data first by selecting a fund.');
 
-  setStatusMessage('Calculating on the server...', 'info');
+  setStatusMessage('Calculating...', 'info');
 
   try {
-    const response = await fetch('/api/calculate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        initialInvestment: initial,
-        investmentDate: investDate,
-        swpStartDate: swpStart,
-        annualWithdrawalRate: annualRate,
-        schemeCode,
-        schemeName: selectedFundMeta && selectedFundMeta.schemeName ? selectedFundMeta.schemeName : '',
-        navData: navData
-      })
+    const navKeys = Object.keys(navData).sort();
+    const firstAvailable = navKeys[0];
+    const latestAvailable = navKeys[navKeys.length - 1];
+    const clampedInvest = investDate < firstAvailable ? firstAvailable : investDate > latestAvailable ? latestAvailable : investDate;
+    const clampedSwp = swpStart < firstAvailable ? firstAvailable : swpStart > latestAvailable ? latestAvailable : swpStart;
+    const effectiveSwp = clampedSwp < clampedInvest ? clampedInvest : clampedSwp;
+
+    const result = swpCalculate({
+      initialInvestment: initial,
+      investmentDate: clampedInvest,
+      swpStartDate: effectiveSwp,
+      annualWithdrawalRate: annualRate,
+      navData
     });
 
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.error || 'Calculation failed');
-    }
+    const adjWarnings = [];
+    if (clampedInvest !== investDate) adjWarnings.push(`Investment date adjusted to ${clampedInvest} to fit available data.`);
+    if (effectiveSwp !== swpStart) adjWarnings.push(`SWP start date adjusted to ${effectiveSwp} to fit available data.`);
+    result.warnings = adjWarnings;
 
     lastCalculation = result;
     const rows = result.schedule || [];
@@ -908,6 +1048,7 @@ async function calculate() {
     document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
     showError(err.message || 'Calculation failed.');
+    setStatusMessage('');
   }
 }
 

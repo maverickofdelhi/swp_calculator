@@ -17,6 +17,24 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const Redis = require('ioredis');
+
+let redisClient = null;
+if (process.env.REDIS_URL) {
+  try {
+    redisClient = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: 3,
+      retryStrategy(times) {
+        if (times > 3) return null;
+        return Math.min(times * 50, 2000);
+      }
+    });
+    redisClient.on('error', (err) => console.warn('[Redis] Connection Error:', err.message));
+    redisClient.on('connect', () => console.log('[Redis] Connected successfully'));
+  } catch (err) {
+    console.warn('[Redis] Initialization failed:', err.message);
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -172,7 +190,7 @@ app.get('/api/funds/search', async (req, res) => {
     }
 
     const key = q.toLowerCase();
-    const cached = getFromCache(cache.search, key, CACHE_TTL_MS.search);
+    const cached = await getFromCache('search', key, CACHE_TTL_MS.search);
     if (cached) {
       return res.json({ results: cached, cached: true });
     }
@@ -186,7 +204,7 @@ app.get('/api/funds/search', async (req, res) => {
       .slice(0, 40)
       .map(({ score, searchText, ...fund }) => fund);
 
-    setInCache(cache.search, key, results);
+    await setInCache('search', key, results, {}, CACHE_TTL_MS.search);
     res.json({ results, cached: false });
   } catch (err) {
     res.status(500).json({ error: 'Failed to search funds', details: err.message });
@@ -197,7 +215,7 @@ app.get('/api/funds/amcs', async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim().toLowerCase();
     const cacheKey = `amcs:${q}`;
-    const cached = getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
+    const cached = await getFromCache('search', cacheKey, CACHE_TTL_MS.search);
     if (cached) {
       return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
@@ -220,7 +238,7 @@ app.get('/api/funds/amcs', async (req, res) => {
         })
         .slice(0, 60);
 
-      setInCache(cache.search, cacheKey, liveResults);
+      await setInCache('search', cacheKey, liveResults, {}, CACHE_TTL_MS.search);
       warmFundCatalog().catch(() => null);
       return res.json({ results: liveResults, cached: false, source: 'mfapi-search', warming: true });
     }
@@ -236,7 +254,7 @@ app.get('/api/funds/amcs', async (req, res) => {
       })
       .slice(0, 60);
 
-    setInCache(cache.search, cacheKey, results);
+    await setInCache('search', cacheKey, results, {}, CACHE_TTL_MS.search);
     res.json({ results, cached: false, source: 'mfapi' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load AMC list', details: err.message });
@@ -252,7 +270,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
     }
 
     const cacheKey = `byamc:${amc.toLowerCase()}::${q}`;
-    const cached = getFromCache(cache.search, cacheKey, CACHE_TTL_MS.search);
+    const cached = await getFromCache('search', cacheKey, CACHE_TTL_MS.search);
     if (cached) {
       return res.json({ results: cached, cached: true, source: 'mfapi' });
     }
@@ -276,7 +294,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
         .slice(0, 60)
         .map(({ score, ...fund }) => fund);
 
-      setInCache(cache.search, cacheKey, funds);
+      await setInCache('search', cacheKey, funds, {}, CACHE_TTL_MS.search);
       warmFundCatalog().catch(() => null);
       return res.json({ results: funds, cached: false, source: 'mfapi-search', warming: true });
     }
@@ -296,7 +314,7 @@ app.get('/api/funds/by-amc', async (req, res) => {
       .slice(0, 60)
       .map(({ score, searchText, ...fund }) => fund);
 
-    setInCache(cache.search, cacheKey, funds);
+    await setInCache('search', cacheKey, funds, {}, CACHE_TTL_MS.search);
     res.json({ results: funds, cached: false, source: 'mfapi' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load funds by AMC', details: err.message });
@@ -312,7 +330,7 @@ app.get('/api/funds/:code/history', async (req, res) => {
     }
 
     const todayIST = getDateKeyInTimeZone('Asia/Kolkata');
-    const cached = getFromCache(cache.history, code, CACHE_TTL_MS.history, { dayKey: todayIST });
+    const cached = await getFromCache('history', code, CACHE_TTL_MS.history, { dayKey: todayIST });
     if (cached) {
       return res.json({ ...cached, cached: true, source: 'mfapi' });
     }
@@ -392,7 +410,7 @@ function validateInputs({ initialInvestment, investmentDate, swpStartDate, annua
 
 async function loadFundHistory(code) {
   const todayIST = getDateKeyInTimeZone('Asia/Kolkata');
-  const cached = getFromCache(cache.history, code, CACHE_TTL_MS.history, { dayKey: todayIST });
+  const cached = await getFromCache('history', code, CACHE_TTL_MS.history, { dayKey: todayIST });
   if (cached) return cached;
 
   const payload = await httpGetJson(`${MFAPI_BASE}/mf/${code}`);
@@ -463,7 +481,7 @@ async function loadFundHistory(code) {
     }
   };
 
-  setInCache(cache.history, code, result, { dayKey: todayIST });
+  await setInCache('history', code, result, { dayKey: todayIST }, CACHE_TTL_MS.history);
   return result;
 }
 
@@ -555,7 +573,7 @@ async function getLiveSchemeCodes() {
 }
 
 async function loadFundCatalog() {
-  const cached = getFromCache(cache.catalog, 'master', CACHE_TTL_MS.catalog);
+  const cached = await getFromCache('catalog', 'master', CACHE_TTL_MS.catalog);
   if (cached) return cached;
 
   const [payload, liveCodes] = await Promise.all([
@@ -605,7 +623,7 @@ async function loadFundCatalog() {
     .sort((a, b) => b.fundCount - a.fundCount || a.amcName.localeCompare(b.amcName));
 
   catalogIndex = { byAmc, amcRows };
-  setInCache(cache.catalog, 'master', filtered);
+  await setInCache('catalog', 'master', filtered, {}, CACHE_TTL_MS.catalog);
   return filtered;
 }
 
@@ -655,9 +673,9 @@ function deriveLiveSearchSeedFromAmc(amcName) {
   return firstToken.length >= 2 ? firstToken : normalized;
 }
 
-function warmFundCatalog() {
-  const cached = getFromCache(cache.catalog, 'master', CACHE_TTL_MS.catalog);
-  if (cached) return Promise.resolve(cached);
+async function warmFundCatalog() {
+  const cached = await getFromCache('catalog', 'master', CACHE_TTL_MS.catalog);
+  if (cached) return cached;
 
   if (!catalogWarmupPromise) {
     catalogWarmupPromise = loadFundCatalog().catch((err) => {

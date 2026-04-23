@@ -723,10 +723,10 @@ async function fetchFundSinceInception(isAuto = false) {
     const inception = allDates[0];
     const firstInvestDate = document.getElementById('investmentDate').value;
     const firstSWPDate = document.getElementById('swpStartDate').value;
-    if (!firstInvestDate || firstInvestDate < inception) {
+    if (!firstInvestDate || swpCompareDates(firstInvestDate, inception) < 0) {
       document.getElementById('investmentDate').value = inception;
     }
-    if (!firstSWPDate || firstSWPDate < inception) {
+    if (!firstSWPDate || swpCompareDates(firstSWPDate, inception) < 0) {
       const d = new Date(inception);
       d.setMonth(d.getMonth() + 1);
       document.getElementById('swpStartDate').value = formatDate(d);
@@ -825,6 +825,10 @@ function swpAddMonths(date, n) {
 
 function swpRound(n, decimals) {
   return Math.round(n * Math.pow(10, decimals)) / Math.pow(10, decimals);
+}
+
+function swpCompareDates(a, b) {
+  return swpParseISODateUTC(a).getTime() - swpParseISODateUTC(b).getTime();
 }
 
 function computeXIRR(cashflows, dates) {
@@ -969,9 +973,17 @@ async function calculate() {
     const navKeys = Object.keys(navData).sort();
     const firstAvailable = navKeys[0];
     const latestAvailable = navKeys[navKeys.length - 1];
-    const clampedInvest = investDate < firstAvailable ? firstAvailable : investDate > latestAvailable ? latestAvailable : investDate;
-    const clampedSwp = swpStart < firstAvailable ? firstAvailable : swpStart > latestAvailable ? latestAvailable : swpStart;
-    const effectiveSwp = clampedSwp < clampedInvest ? clampedInvest : clampedSwp;
+    const clampedInvest = swpCompareDates(investDate, firstAvailable) < 0
+      ? firstAvailable
+      : swpCompareDates(investDate, latestAvailable) > 0
+        ? latestAvailable
+        : investDate;
+    const clampedSwp = swpCompareDates(swpStart, firstAvailable) < 0
+      ? firstAvailable
+      : swpCompareDates(swpStart, latestAvailable) > 0
+        ? latestAvailable
+        : swpStart;
+    const effectiveSwp = swpCompareDates(clampedSwp, clampedInvest) < 0 ? clampedInvest : clampedSwp;
 
     const result = swpCalculate({
       initialInvestment: initial,

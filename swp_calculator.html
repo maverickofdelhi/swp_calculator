@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SWP Calculator</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --surface2: #f2f2ef;
+    --border: #e4e4df;
+    --accent: #111111;
+    --accent2: #111111;
+    --gain: #0f7a3d;
+    --loss: #b24b4b;
+    --text: #171717;
+    --muted: #6c6c6c;
+    --radius: 14px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 28px 18px 56px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  header h1 {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+    color: var(--text);
+    letter-spacing: -0.04em;
+    line-height: 1;
+    font-weight: 650;
+  }
+
+  header p {
+    color: var(--muted);
+    font-size: 0.82rem;
+    margin-top: 8px;
+    letter-spacing: 0;
+  }
+
+  .container { max-width: 1040px; margin: 0 auto; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    margin-bottom: 18px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
+  }
+
+  .card-title {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.02em;
+  }
+
+  .inputs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px;
+  }
+
+  .field label {
+    display: block;
+    font-size: 0.71rem;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .field input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.95rem;
+    padding: 11px 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .field input:focus { border-color: var(--accent); }
+
+  /* NAV Data section */
+  .nav-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: flex-end;
+    margin-bottom: 16px;
+  }
+
+  .api-row {
+    display: grid;
+    grid-template-columns: 1.3fr 0.9fr;
+    gap: 10px;
+    align-items: flex-end;
+    margin-bottom: 12px;
+  }
+
+  #apiFundMeta {
+    font-size: 0.74rem;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+
+  .nav-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 10px;
+    align-items: flex-end;
+    margin-bottom: 8px;
+  }
+
+  .nav-list {
+    max-height: 190px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface2);
+    padding: 6px;
+  }
+
+  .nav-item {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-item:last-child { border-bottom: none; }
+
+  .nav-item span { color: var(--text); }
+
+  .btn {
+    font-family: inherit;
+    font-size: 0.8rem;
+    letter-spacing: 0;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+  .btn-primary:hover { opacity: 0.92; }
+
+  .btn-danger {
+    background: transparent;
+    border: 1px solid var(--loss);
+    color: var(--loss);
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+  .btn-danger:hover { background: rgba(224,92,92,0.12); }
+
+  .btn-secondary {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn-secondary:hover { border-color: #bcbcb4; background: #efefe9; }
+
+  .btn-calculate {
+    width: 100%;
+    padding: 13px;
+    font-size: 0.9rem;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    border-radius: 12px;
+    margin-top: 6px;
+  }
+  .btn-calculate:hover { opacity: 0.92; transform: translateY(-1px); }
+
+  .status-msg {
+    border-radius: 8px;
+    padding: 11px 14px;
+    margin-bottom: 14px;
+    font-size: 0.82rem;
+    border: 1px solid transparent;
+  }
+
+  .status-msg.info {
+    background: #f5f5f3;
+    border-color: var(--border);
+    color: var(--text);
+  }
+
+  .status-msg.error {
+    background: rgba(217,76,76,0.1);
+    border-color: var(--loss);
+    color: var(--loss);
+  }
+
+  /* Summary Cards */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .stat-card .stat-label {
+    font-size: 0.66rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 7px;
+  }
+
+  .stat-card .stat-value {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 1.35rem;
+    color: var(--text);
+    font-weight: 650;
+  }
+
+  .stat-card .stat-footnote {
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.01em;
+  }
+
+  .stat-card.highlight .stat-value { color: var(--accent); }
+  .stat-card.gain .stat-value { color: var(--gain); }
+  .stat-card.loss .stat-value { color: var(--loss); }
+
+  /* Table */
+  .table-wrap {
+    overflow-x: auto;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  thead tr {
+    background: var(--surface2);
+    border-bottom: 2px solid var(--border);
+  }
+
+  th {
+    text-align: right;
+    padding: 11px 14px;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  th:first-child { text-align: center; }
+
+  td {
+    padding: 9px 14px;
+    text-align: right;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  td:first-child { text-align: center; color: var(--muted); }
+
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+
+  .xirr-positive { color: var(--gain); }
+  .xirr-negative { color: var(--loss); }
+
+  .hidden { display: none; }
+
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 18px;
+  }
+
+  .chart-card canvas {
+    width: 100% !important;
+    height: 260px !important;
+  }
+
+  .results-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 0 0 16px;
+  }
+
+  .nav-hint {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  .section-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+
+  #errorMsg {
+    background: rgba(217,76,76,0.1);
+    border: 1px solid var(--loss);
+    border-radius: 8px;
+    color: var(--loss);
+    padding: 12px 16px;
+    font-size: 0.82rem;
+    margin-bottom: 16px;
+  }
+
+  .nav-count {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 5px;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #f2f2ef;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    font-size: 0.66rem;
+    margin-left: 8px;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>SWP Calculator</h1>
+    <p>SYSTEMATIC WITHDRAWAL PLAN · PORTFOLIO ANALYSIS <span class="pill">INVESTMYFUNDS STYLE</span></p>
+  </header>
+
+  <!-- Inputs -->
+  <div class="card">
+    <div class="card-title">Investment Parameters</div>
+    <div class="inputs-grid">
+      <div class="field">
+        <label>Initial Investment (₹)</label>
+        <input type="number" id="initialInvestment" value="1000000" min="1">
+      </div>
+      <div class="field">
+        <label>Investment Date</label>
+        <input type="date" id="investmentDate" value="2018-03-15">
+      </div>
+      <div class="field">
+        <label>SWP Start Date</label>
+        <input type="date" id="swpStartDate" value="2018-04-12">
+      </div>
+      <div class="field">
+        <label>Annual Withdrawal Rate (%)</label>
+        <input type="number" id="annualWithdrawalRate" value="10" min="0.1" max="100" step="0.1">
+      </div>
+    </div>
+  </div>
+
+  <!-- NAV Data -->
+  <div class="card">
+    <div class="card-title">NAV Data</div>
+
+    <div class="api-row">
+      <div class="field">
+        <label>Search Fund (MFAPI)</label>
+        <input type="text" id="fundSearchApi" list="fundOptions" placeholder="Type fund name (e.g. HDFC, SBI, Axis)">
+        <datalist id="fundOptions"></datalist>
+      </div>
+      <div class="field">
+        <label>Scheme Code</label>
+        <input type="number" id="schemeCode" placeholder="e.g. 100033" min="1">
+      </div>
+    </div>
+    <div id="apiFundMeta">Select a mutual fund and the app will fetch live data automatically.</div>
+
+    <div class="status-msg info">Select a fund and the app will fetch history on demand.</div>
+  </div>
+
+  <div id="errorMsg" class="hidden"></div>
+  <div id="statusMsg" class="hidden"></div>
+  <button class="btn btn-calculate" onclick="calculate()">Calculate SWP</button>
+
+  <!-- Results -->
+  <div id="results" class="hidden" style="margin-top:28px">
+    <div class="results-actions">
+      <button class="btn btn-secondary" onclick="exportResultsCSV()">Export CSV</button>
+      <button class="btn btn-secondary" onclick="exportResultsExcel()">Export Excel</button>
+    </div>
+    <div class="summary-grid" id="summaryGrid"></div>
+    <div class="chart-card">
+      <div class="card-title">Live Trend</div>
+      <canvas id="trendChart"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-title">Monthly Withdrawal Schedule</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Date</th>
+              <th>NAV (₹)</th>
+              <th>Units Redeemed</th>
+              <th>Units Remaining</th>
+              <th>Portfolio Value (₹)</th>
+              <th>Withdrawn (₹)</th>
+              <th>XIRR</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+// ---- NAV Store ----
+let navData = {}; // { "YYYY-MM-DD": nav }
+let selectedFundMeta = null;
+let searchDebounce = null;
+let autoFetchDebounce = null;
+let lastFetchedSchemeCode = '';
+let lastCalculation = null;
+let trendChart = null;
+
+function setStatusMessage(message, kind = 'info') {
+  const el = document.getElementById('statusMsg');
+  if (!message) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    el.className = 'hidden';
+    return;
+  }
+  el.textContent = message;
+  el.className = `status-msg ${kind}`;
+}
+
+function getFundBounds() {
+  const keys = Object.keys(navData).sort();
+  if (!keys.length) return null;
+  return { start: keys[0], end: keys[keys.length - 1] };
+}
+
+function clampDateToHistory(dateStr, bounds, preference = 'start') {
+  if (!dateStr || !bounds) return { date: dateStr, changed: false };
+  let next = dateStr;
+  let changed = false;
+  if (dateStr < bounds.start) {
+    next = bounds.start;
+    changed = true;
+  }
+  if (dateStr > bounds.end) {
+    next = bounds.end;
+    changed = true;
+  }
+  if (preference === 'end' && next < bounds.start) {
+    next = bounds.start;
+    changed = true;
+  }
+  return { date: next, changed };
+}
+
+function normalizeRequestedDates(investDate, swpStart, endDate, bounds) {
+  const warnings = [];
+  let start = investDate;
+  let swp = swpStart;
+  let end = endDate;
+
+  if (!bounds) {
+    return { start, swp, end, warnings, valid: false, message: 'No NAV data loaded.' };
+  }
+
+  const startClamp = clampDateToHistory(start, bounds, 'start');
+  if (startClamp.changed) warnings.push(`Investment start date was adjusted to ${startClamp.date} to fit available data.`);
+  start = startClamp.date;
+
+  const swpClamp = clampDateToHistory(swp, bounds, 'start');
+  if (swpClamp.changed) warnings.push(`SWP start date was adjusted to ${swpClamp.date} to fit available data.`);
+  swp = swpClamp.date;
+
+  if (!end) {
+    end = bounds.end;
+    warnings.push(`Analysis end date was set to the latest available NAV date (${bounds.end}).`);
+  } else {
+    const endClamp = clampDateToHistory(end, bounds, 'end');
+    if (endClamp.changed) warnings.push(`Analysis end date was adjusted to ${endClamp.date} to fit available data.`);
+    end = endClamp.date;
+  }
+
+  if (swp < start) {
+    swp = start;
+    warnings.push(`SWP start date was moved to the investment start date (${start}).`);
+  }
+
+  if (end < swp) {
+    end = swp;
+    warnings.push(`Analysis end date was moved to the SWP start date (${swp}).`);
+  }
+
+  return { start, swp, end, warnings, valid: true };
+}
+
+function parseMFAPIDate(dateStr) {
+  // MFAPI date format: DD-MM-YYYY
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return null;
+  const dd = parts[0].padStart(2, '0');
+  const mm = parts[1].padStart(2, '0');
+  const yyyy = parts[2];
+  if (!/^\d{4}$/.test(yyyy)) return null;
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+async function searchFundsFromAPI() {
+  const input = document.getElementById('fundSearchApi');
+  const datalist = document.getElementById('fundOptions');
+  const query = (input.value || '').trim();
+
+  if (query.length < 2) {
+    datalist.innerHTML = '';
+    return;
+  }
+
+  try {
+    const backendUrl = `/api/funds/search?q=${encodeURIComponent(query)}`;
+    const directUrl = `https://api.mfapi.in/mf/search?q=${encodeURIComponent(query)}`;
+    const data = await fetchJSONWithFallback(backendUrl, directUrl);
+    const top = Array.isArray(data.results)
+      ? data.results.slice(0, 20)
+      : (Array.isArray(data) ? data.slice(0, 20) : []);
+    datalist.innerHTML = top
+      .map(f => `<option value="${String(f.schemeName).replace(/\"/g, '&quot;')} | ${f.schemeCode}"></option>`)
+      .join('');
+  } catch (_) {
+    // Silent fail for search suggestions only.
+  }
+}
+
+function handleFundSearchInput() {
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(searchFundsFromAPI, 350);
+
+  const value = document.getElementById('fundSearchApi').value;
+  const parts = value.split('|');
+  if (parts.length >= 2) {
+    const code = parts[parts.length - 1].trim();
+    if (/^\d+$/.test(code)) {
+      document.getElementById('schemeCode').value = code;
+      scheduleAutoFetch();
+    }
+  }
+}
+
+function handleFundSearchSelection() {
+  const value = document.getElementById('fundSearchApi').value;
+  const parts = value.split('|');
+  if (parts.length >= 2) {
+    const code = parts[parts.length - 1].trim();
+    if (/^\d+$/.test(code)) {
+      document.getElementById('schemeCode').value = code;
+      fetchFundSinceInception(true);
+    }
+  }
+}
+
+function scheduleAutoFetch() {
+  if (autoFetchDebounce) clearTimeout(autoFetchDebounce);
+  autoFetchDebounce = setTimeout(() => {
+    const code = document.getElementById('schemeCode').value.trim();
+    if (/^\d+$/.test(code)) {
+      fetchFundSinceInception(true);
+    }
+  }, 250);
+}
+
+async function fetchFundSinceInception(isAuto = false) {
+  const code = document.getElementById('schemeCode').value.trim();
+  if (!code || !/^\d+$/.test(code)) {
+    if (!isAuto) {
+      showError('Enter a valid scheme code before fetching fund data.');
+    }
+    return;
+  }
+
+  if (isAuto && code === lastFetchedSchemeCode && Object.keys(navData).length > 0) {
+    return;
+  }
+
+  const apiMeta = document.getElementById('apiFundMeta');
+  apiMeta.textContent = isAuto
+    ? 'Auto-fetching live fund data...'
+    : 'Fetching live fund data...';
+  document.getElementById('errorMsg').classList.add('hidden');
+
+  try {
+    const backendUrl = `/api/funds/${code}/history`;
+    const directUrl = `https://api.mfapi.in/mf/${code}`;
+    const payload = await fetchJSONWithFallback(backendUrl, directUrl);
+
+    let rows = [];
+    if (payload.navData && typeof payload.navData === 'object') {
+      rows = Object.entries(payload.navData);
+    } else if (Array.isArray(payload.data)) {
+      rows = payload.data
+        .map(item => [parseMFAPIDate(item.date), item.nav])
+        .filter(([iso]) => !!iso);
+    }
+
+    if (!rows.length) {
+      showError('No historical data returned for this scheme code.');
+      apiMeta.textContent = 'No data found for this scheme code.';
+      return;
+    }
+
+    const rebuilt = {};
+    for (const [isoDate, navRaw] of rows) {
+      const navValue = parseFloat(navRaw);
+      if (!isoDate || !isFinite(navValue) || navValue <= 0) continue;
+      rebuilt[isoDate] = navValue;
+    }
+
+    const allDates = Object.keys(rebuilt).sort();
+    if (!allDates.length) {
+      showError('Historical data format invalid for this fund.');
+      apiMeta.textContent = 'Unable to parse fund history.';
+      return;
+    }
+
+    navData = rebuilt;
+    selectedFundMeta = {
+      schemeCode: code,
+      schemeName: payload.schemeName || (payload.meta && payload.meta.scheme_name) || `Scheme ${code}`,
+      priceHistory: payload.priceHistory || [],
+      returns: payload.returns || null
+    };
+    lastFetchedSchemeCode = code;
+
+    const latestAvailable = allDates[allDates.length - 1];
+
+    // Set dates to fund-valid defaults if current dates are outside range.
+    const inception = allDates[0];
+    const firstInvestDate = document.getElementById('investmentDate').value;
+    const firstSWPDate = document.getElementById('swpStartDate').value;
+    if (!firstInvestDate || firstInvestDate < inception) {
+      document.getElementById('investmentDate').value = inception;
+    }
+    if (!firstSWPDate || firstSWPDate < inception) {
+      const d = new Date(inception);
+      d.setMonth(d.getMonth() + 1);
+      document.getElementById('swpStartDate').value = formatDate(d);
+    }
+    if (payload.returns) {
+      const totalReturnText = payload.returns.totalReturnPercent !== null && payload.returns.totalReturnPercent !== undefined
+        ? `${payload.returns.totalReturnPercent.toFixed(2)}%`
+        : 'N/A';
+      const annualizedText = payload.returns.annualizedReturnPercent !== null && payload.returns.annualizedReturnPercent !== undefined
+        ? `${payload.returns.annualizedReturnPercent.toFixed(2)}%`
+        : 'N/A';
+      apiMeta.textContent = `${selectedFundMeta.schemeName} (Code: ${selectedFundMeta.schemeCode}) · ${allDates.length} points · Return ${totalReturnText} · Annualized ${annualizedText}`;
+    }
+  } catch (_) {
+    showError('Could not load live fund data. Check the scheme code, network, and try again.');
+    apiMeta.textContent = 'Live data fetch failed. Retry or choose another fund.';
+  }
+}
+
+async function fetchWithRetry(url, options = {}, retries = 2, timeoutMs = 8000) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      clearTimeout(timer);
+      lastError = err;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        continue;
+      }
+    }
+  }
+  throw lastError || new Error('Request failed');
+}
+
+async function fetchJSONWithFallback(primaryUrl, fallbackUrl) {
+  try {
+    return await fetchWithRetry(primaryUrl, {}, 2, 8000);
+  } catch (primaryError) {
+    try {
+      return await fetchWithRetry(fallbackUrl, {}, 1, 8000);
+    } catch (fallbackError) {
+      throw new Error(`Live data request failed (${primaryError.message}). Fallback also failed (${fallbackError.message}).`);
+    }
+  }
+}
+
+function handleSchemeCodeAutoFetch() {
+  scheduleAutoFetch();
+}
+
+// ---- Main Calculate ----
+async function calculate() {
+  const errEl = document.getElementById('errorMsg');
+  errEl.classList.add('hidden');
+  setStatusMessage('');
+
+  const initial = parseFloat(document.getElementById('initialInvestment').value);
+  const investDate = document.getElementById('investmentDate').value;
+  const swpStart = document.getElementById('swpStartDate').value;
+  const annualRate = parseFloat(document.getElementById('annualWithdrawalRate').value) / 100;
+  const schemeCode = document.getElementById('schemeCode').value.trim();
+
+  if (!initial || isNaN(initial) || initial <= 0) return showError('Enter a valid initial investment.');
+  if (!investDate) return showError('Enter investment date.');
+  if (!swpStart) return showError('Enter SWP start date.');
+  if (!annualRate || isNaN(annualRate)) return showError('Enter a valid withdrawal rate.');
+  if (!schemeCode) return showError('Enter a scheme code.');
+
+  setStatusMessage('Calculating on the server...', 'info');
+
+  try {
+    const response = await fetch('/api/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        initialInvestment: initial,
+        investmentDate: investDate,
+        swpStartDate: swpStart,
+        annualWithdrawalRate: annualRate,
+        schemeCode
+      })
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Calculation failed');
+    }
+
+    lastCalculation = result;
+    const rows = result.schedule || [];
+    const summary = result.summary || {};
+    const warnings = result.warnings || [];
+    const audit = result.audit || null;
+
+    if (warnings.length) {
+      setStatusMessage(warnings.join(' '), 'info');
+    } else {
+      setStatusMessage('');
+    }
+
+    document.getElementById('summaryGrid').innerHTML = `
+      <div class="stat-card highlight">
+        <div class="stat-label">Initial Investment</div>
+        <div class="stat-value">₹${fmt(summary.initialInvestment || initial)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Withdrawn</div>
+        <div class="stat-value">₹${fmt(summary.totalWithdrawn || 0)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Current Portfolio Value</div>
+        <div class="stat-value">₹${fmt(summary.currentPortfolioValue || 0)}</div>
+      </div>
+      <div class="stat-card ${(summary.netGainLoss || 0) >= 0 ? 'gain' : 'loss'}">
+        <div class="stat-label">Net Gain / Loss</div>
+        <div class="stat-value">${(summary.netGainLoss || 0) >= 0 ? '+' : ''}₹${fmt(summary.netGainLoss || 0)}</div>
+      </div>
+      <div class="stat-card ${(summary.xirr || 0) >= 0 ? 'gain' : 'loss'}">
+        <div class="stat-label">XIRR (Annualised)</div>
+        <div class="stat-value">${summary.xirrPercent !== null && summary.xirrPercent !== undefined ? summary.xirrPercent.toFixed(2) + '%' : 'N/A'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Units Purchased at Start</div>
+        <div class="stat-value">${summary.unitsPurchasedAtStart !== undefined ? Number(summary.unitsPurchasedAtStart).toFixed(4) : '0.0000'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Latest NAV</div>
+        <div class="stat-value">₹${fmt(summary.latestNAV || 0)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Months Processed</div>
+        <div class="stat-value">${rows.length}</div>
+      </div>
+      <div class="stat-card ${audit && audit.passed ? 'gain' : 'loss'}">
+        <div class="stat-label">Internal Audit</div>
+        <div class="stat-value">${audit ? (audit.passed ? 'PASS' : 'CHECK') : 'N/A'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Invest NAV Used</div>
+        <div class="stat-value">${summary.investNAVExact !== undefined ? Number(summary.investNAVExact).toFixed(6) : Number(summary.investNAV || 0).toFixed(2)}</div>
+        <div class="stat-footnote">${summary.investNAVDate || summary.investmentDate || ''}</div>
+      </div>
+    `;
+
+    document.getElementById('tableBody').innerHTML = rows.map(r => `
+      <tr>
+        <td>${r.month}</td>
+        <td>${r.date}</td>
+        <td>${r.nav.toFixed(2)}</td>
+        <td>${r.unitsRedeemed.toFixed(4)}</td>
+        <td>${r.unitsRemaining.toFixed(4)}</td>
+        <td>${fmt(r.portfolioValue)}</td>
+        <td>${fmt(r.amountWithdrawn)}</td>
+        <td class="${r.xirr !== null ? (r.xirr >= 0 ? 'xirr-positive' : 'xirr-negative') : ''}">
+          ${r.xirr !== null ? (r.xirr * 100).toFixed(2) + '%' : 'N/A'}
+        </td>
+      </tr>`).join('');
+
+    renderCharts(result);
+
+    document.getElementById('results').classList.remove('hidden');
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    showError(err.message || 'Calculation failed.');
+  }
+}
+
+function fmt(n) {
+  return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorMsg');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function renderCharts(result) {
+  const chartCanvas = document.getElementById('trendChart');
+  if (!chartCanvas || typeof Chart === 'undefined') return;
+
+  const rows = result.schedule || [];
+  if (!rows.length) return;
+
+  const portfolioLabels = rows.map((row) => row.date);
+  const portfolioValues = rows.map((row) => row.portfolioValue);
+  const navValues = rows.map((row) => row.nav);
+
+  if (trendChart) trendChart.destroy();
+
+  trendChart = new Chart(chartCanvas, {
+    type: 'line',
+    data: {
+      labels: portfolioLabels,
+      datasets: [{
+        label: 'NAV',
+        data: navValues,
+        borderColor: '#1f4e5f',
+        backgroundColor: 'rgba(31, 78, 95, 0.08)',
+        yAxisID: 'yNav',
+        pointRadius: 0,
+        borderWidth: 2,
+        tension: 0.18,
+        fill: false
+      }, {
+        label: 'Portfolio',
+        data: portfolioValues,
+        borderColor: '#4f4f4f',
+        backgroundColor: 'rgba(79, 79, 79, 0.08)',
+        yAxisID: 'yPortfolio',
+        pointRadius: 0,
+        borderWidth: 3,
+        tension: 0.2,
+        fill: false
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, labels: { boxWidth: 10, usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              if (ctx.dataset.label === 'NAV') {
+                return `NAV: INR ${Number(ctx.raw).toFixed(2)}`;
+              }
+              return `Portfolio: INR ${Number(ctx.raw).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          display: true,
+          grid: { display: false },
+          ticks: { maxTicksLimit: 10, maxRotation: 45, minRotation: 45 }
+        },
+        yPortfolio: {
+          type: 'linear',
+          position: 'left',
+          beginAtZero: false,
+          grid: { color: '#ecece8' },
+          ticks: {
+            callback: function(value) {
+              return Number(value).toLocaleString('en-IN');
+            }
+          }
+        },
+        yNav: {
+          type: 'linear',
+          position: 'right',
+          beginAtZero: false,
+          grid: { drawOnChartArea: false },
+          ticks: {
+            callback: function(value) {
+              return Number(value).toFixed(2);
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function exportResultsCSV() {
+  if (!lastCalculation) return showError('Run a calculation before exporting.');
+  const headers = ['Month', 'Date', 'NAV', 'Units Redeemed', 'Units Remaining', 'Portfolio Value', 'Withdrawn', 'XIRR'];
+  const rows = (lastCalculation.schedule || []).map((row) => [
+    row.month,
+    row.date,
+    row.nav,
+    row.unitsRedeemed,
+    row.unitsRemaining,
+    row.portfolioValue,
+    row.amountWithdrawn,
+    row.xirr !== null ? row.xirr : ''
+  ]);
+  const csv = [headers, ...rows]
+    .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  downloadFile(csv, 'swp-results.csv', 'text/csv;charset=utf-8');
+}
+
+function exportResultsExcel() {
+  if (!lastCalculation) return showError('Run a calculation before exporting.');
+  const summaryRows = Object.entries(lastCalculation.summary).map(([key, value]) => `<tr><th>${key}</th><td>${value}</td></tr>`).join('');
+  const tableRows = (lastCalculation.schedule || []).map((row) => `
+    <tr>
+      <td>${row.month}</td>
+      <td>${row.date}</td>
+      <td>${row.nav}</td>
+      <td>${row.unitsRedeemed}</td>
+      <td>${row.unitsRemaining}</td>
+      <td>${row.portfolioValue}</td>
+      <td>${row.amountWithdrawn}</td>
+      <td>${row.xirr !== null ? row.xirr : ''}</td>
+    </tr>`).join('');
+  const html = `
+    <html>
+      <head><meta charset="utf-8"><title>SWP Results</title></head>
+      <body>
+        <h2>Summary</h2>
+        <table border="1">${summaryRows}</table>
+        <h2>Schedule</h2>
+        <table border="1">
+          <tr><th>Month</th><th>Date</th><th>NAV</th><th>Units Redeemed</th><th>Units Remaining</th><th>Portfolio Value</th><th>Withdrawn</th><th>XIRR</th></tr>
+          ${tableRows}
+        </table>
+      </body>
+    </html>`;
+  downloadFile(html, 'swp-results.xls', 'application/vnd.ms-excel');
+}
+
+function downloadFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('fundSearchApi').addEventListener('input', handleFundSearchInput);
+document.getElementById('fundSearchApi').addEventListener('change', handleFundSearchSelection);
+document.getElementById('schemeCode').addEventListener('input', handleSchemeCodeAutoFetch);
+document.getElementById('schemeCode').addEventListener('change', handleSchemeCodeAutoFetch);
+document.getElementById('schemeCode').addEventListener('blur', handleSchemeCodeAutoFetch);
+</script>
+</body>
+</html>

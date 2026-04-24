@@ -530,16 +530,16 @@
       </div>
       <div class="field">
         <label>Investment Date</label>
-        <div style="display:flex; gap:5px; align-items:center;">
-          <input type="date" id="investmentDate">
-          <button type="button" class="clear-btn visible" onclick="resetToInception()" title="Reset to Inception">M</button>
+        <div style="display:flex; gap:6px; align-items:stretch;">
+          <input type="date" id="investmentDate" style="flex:1; min-width:0;">
+          <button type="button" onclick="resetToInception()" title="Reset to fund inception date" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:0 10px;cursor:pointer;font-size:0.72rem;color:var(--muted);white-space:nowrap;font-family:inherit;flex-shrink:0;">↺ Inception</button>
         </div>
       </div>
       <div class="field">
         <label>SWP Start Date</label>
-        <div style="display:flex; gap:5px; align-items:center;">
-          <input type="date" id="swpStartDate">
-          <button type="button" class="clear-btn visible" onclick="resetToMaxSWP()" title="Reset to Max SWP">M</button>
+        <div style="display:flex; gap:6px; align-items:stretch;">
+          <input type="date" id="swpStartDate" style="flex:1; min-width:0;">
+          <button type="button" onclick="resetToMaxSWP()" title="Reset to 1 month after investment date" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:0 10px;cursor:pointer;font-size:0.72rem;color:var(--muted);white-space:nowrap;font-family:inherit;flex-shrink:0;">↺ +1 Mo</button>
         </div>
       </div>
       <div class="field">
@@ -700,6 +700,11 @@ function clearFundSelectionForAmc() {
   document.getElementById('schemeCode').value = '';
   lastFundSuggestions = [];
   hideFundSuggestions();
+  navData = {};
+  selectedFundMeta = null;
+  lastFetchedSchemeCode = '';
+  document.getElementById('navLiveStatus').textContent = 'Choose a fund to auto-load live history.';
+  document.getElementById('dataRangeInfo').classList.add('hidden');
 }
 
 function selectAmcSuggestionByIndex(index) {
@@ -757,71 +762,6 @@ function setStatusMessage(message, kind = 'info') {
   }
   el.textContent = message;
   el.className = `status-msg ${kind}`;
-}
-
-function getFundBounds() {
-  const keys = Object.keys(navData).sort();
-  if (!keys.length) return null;
-  return { start: keys[0], end: keys[keys.length - 1] };
-}
-
-function clampDateToHistory(dateStr, bounds, preference = 'start') {
-  if (!dateStr || !bounds) return { date: dateStr, changed: false };
-  let next = dateStr;
-  let changed = false;
-  if (dateStr < bounds.start) {
-    next = bounds.start;
-    changed = true;
-  }
-  if (dateStr > bounds.end) {
-    next = bounds.end;
-    changed = true;
-  }
-  if (preference === 'end' && next < bounds.start) {
-    next = bounds.start;
-    changed = true;
-  }
-  return { date: next, changed };
-}
-
-function normalizeRequestedDates(investDate, swpStart, endDate, bounds) {
-  const warnings = [];
-  let start = investDate;
-  let swp = swpStart;
-  let end = endDate;
-
-  if (!bounds) {
-    return { start, swp, end, warnings, valid: false, message: 'No NAV data loaded.' };
-  }
-
-  const startClamp = clampDateToHistory(start, bounds, 'start');
-  if (startClamp.changed) warnings.push(`Investment start date was adjusted to ${startClamp.date} to fit available data.`);
-  start = startClamp.date;
-
-  const swpClamp = clampDateToHistory(swp, bounds, 'start');
-  if (swpClamp.changed) warnings.push(`SWP start date was adjusted to ${swpClamp.date} to fit available data.`);
-  swp = swpClamp.date;
-
-  if (!end) {
-    end = bounds.end;
-    warnings.push(`Analysis end date was set to the latest available NAV date (${bounds.end}).`);
-  } else {
-    const endClamp = clampDateToHistory(end, bounds, 'end');
-    if (endClamp.changed) warnings.push(`Analysis end date was adjusted to ${endClamp.date} to fit available data.`);
-    end = endClamp.date;
-  }
-
-  if (swp < start) {
-    swp = start;
-    warnings.push(`SWP start date was moved to the investment start date (${start}).`);
-  }
-
-  if (end < swp) {
-    end = swp;
-    warnings.push(`Analysis end date was moved to the SWP start date (${swp}).`);
-  }
-
-  return { start, swp, end, warnings, valid: true };
 }
 
 function parseMFAPIDate(dateStr) {
@@ -955,7 +895,7 @@ function handleFundSearchSelection() {
       ? `Selected: ${parsed.name} (Code: ${parsed.code}). Loading live data...`
       : `Selected scheme code: ${parsed.code}. Loading live data...`;
     hideFundSuggestions();
-    fetchFundSinceInception(true);
+    fetchFundSinceInception(false);
   }
 }
 
@@ -1031,17 +971,11 @@ async function ensureAmcSelectedForFundSearch() {
 
 function extractSchemeSelection(value) {
   const text = String(value || '').trim();
-  const match = text.match(/^(.*)\|\s*(\d+)\s*$/);
+  // Only extract code from explicit "Name | CODE" format (5+ digit code)
+  const match = text.match(/^(.*)\|\s*(\d{5,})\s*$/);
   if (match) {
     return { name: match[1].trim(), code: match[2].trim() };
   }
-
-  const codeMatch = text.match(/(\d+)\s*$/);
-  if (codeMatch) {
-    const code = codeMatch[1].trim();
-    return { name: schemeLookup.get(code) || text.replace(codeMatch[0], '').trim(), code };
-  }
-
   return { name: text, code: '' };
 }
 
@@ -1394,17 +1328,42 @@ function computeXIRR(cashflows, dates) {
   return bestValue < 1e-4 ? bestRate : null;
 }
 
+function computeXIRRFast(cashflows, dates) {
+  function npv(r) {
+    return cashflows.reduce((acc, cf, i) => acc + cf / Math.pow(1 + r, (dates[i] - dates[0]) / (365.25 * 86400000)), 0);
+  }
+  function dnpv(r) {
+    return cashflows.reduce((acc, cf, i) => {
+      const t = (dates[i] - dates[0]) / (365.25 * 86400000);
+      return acc - t * cf / Math.pow(1 + r, t + 1);
+    }, 0);
+  }
+  let r = 0.1;
+  for (let i = 0; i < 60; i++) {
+    const fr = npv(r);
+    if (Math.abs(fr) < 1e-7) break;
+    const dfr = dnpv(r);
+    if (Math.abs(dfr) < 1e-12) break;
+    r -= fr / dfr;
+    if (r < -0.9999) r = -0.9999;
+    if (!isFinite(r)) return null;
+  }
+  if (!isFinite(r)) return null;
+  return Math.abs(npv(r)) < 1e-4 ? r : null;
+}
+
 function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, navData: nd }) {
   const navKeys = Object.keys(nd).sort();
 
   function getNAV(dateStr) {
     if (nd[dateStr] !== undefined) return { date: dateStr, nav: nd[dateStr] };
-    let best = null;
-    for (const k of navKeys) {
-      if (k <= dateStr) best = k;
-      else break;
+    let lo = 0, hi = navKeys.length - 1, best = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (navKeys[mid] <= dateStr) { best = mid; lo = mid + 1; }
+      else hi = mid - 1;
     }
-    return best ? { date: best, nav: nd[best] } : null;
+    return best >= 0 ? { date: navKeys[best], nav: nd[navKeys[best]] } : null;
   }
 
   const investNAVInfo = getNAV(investmentDate);
@@ -1439,7 +1398,7 @@ function swpCalculate({ initialInvestment, investmentDate, swpStartDate, annualW
 
     let xirrVal = null;
     if (cfAmounts.length >= 2) {
-      xirrVal = computeXIRR([...cfAmounts, portfolioAfter], [...cfDates, swpParseISODateUTC(actualDateStr)]);
+      xirrVal = computeXIRRFast([...cfAmounts, portfolioAfter], [...cfDates, swpParseISODateUTC(actualDateStr)]);
     }
 
     totalWithdrawn += monthlyWithdrawal;
@@ -1553,7 +1512,7 @@ async function calculate() {
 
     const gainLoss = Number(summary.netGainLoss || 0);
     const gainLossClass = gainLoss > 0 ? 'gain' : (gainLoss < 0 ? 'loss' : '');
-    const gainLossSign = gainLoss > 0 ? '+' : '';
+    const gainLossSign = gainLoss > 0 ? '+' : gainLoss < 0 ? '-' : '';
     
     const xirr = summary.xirrPercent !== null && summary.xirrPercent !== undefined ? summary.xirrPercent.toFixed(2) + '%' : 'N/A';
     const xirrClass = (summary.xirrPercent || 0) > 0 ? 'gain' : ((summary.xirrPercent || 0) < 0 ? 'loss' : '');
@@ -1573,7 +1532,7 @@ async function calculate() {
       </div>
       <div class="stat-card ${gainLossClass}">
         <div class="stat-label">Net Gain / Loss</div>
-        <div class="stat-value">${gainLossSign}₹${fmt(gainLoss)}</div>
+        <div class="stat-value">${gainLossSign}₹${fmt(Math.abs(gainLoss))}</div>
       </div>
       <div class="stat-card ${xirrClass}">
         <div class="stat-label">XIRR (Annualised)</div>
@@ -1727,7 +1686,7 @@ function renderCharts(result) {
 
 function exportResultsCSV() {
   if (!lastCalculation) return showError('Run a calculation before exporting.');
-  const headers = ['Month', 'Date', 'NAV', 'Units Redeemed', 'Units Remaining', 'Portfolio Value', 'Withdrawn', 'XIRR'];
+  const headers = ['Month', 'Date', 'NAV (Rs)', 'Units Redeemed', 'Units Remaining', 'Portfolio Value (Rs)', 'Withdrawn (Rs)', 'XIRR (%)'];
   const rows = (lastCalculation.schedule || []).map((row) => [
     row.month,
     row.date,
@@ -1736,7 +1695,7 @@ function exportResultsCSV() {
     row.unitsRemaining,
     row.portfolioValue,
     row.amountWithdrawn,
-    row.xirr !== null ? row.xirr : ''
+    row.xirrPercent !== null ? row.xirrPercent : ''
   ]);
   const csv = [headers, ...rows]
     .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
@@ -1756,7 +1715,7 @@ function exportResultsExcel() {
       <td>${row.unitsRemaining}</td>
       <td>${row.portfolioValue}</td>
       <td>${row.amountWithdrawn}</td>
-      <td>${row.xirr !== null ? row.xirr : ''}</td>
+      <td>${row.xirrPercent !== null ? row.xirrPercent : ''}</td>
     </tr>`).join('');
   const html = `
     <html>
@@ -1766,7 +1725,7 @@ function exportResultsExcel() {
         <table border="1">${summaryRows}</table>
         <h2>Schedule</h2>
         <table border="1">
-          <tr><th>Month</th><th>Date</th><th>NAV</th><th>Units Redeemed</th><th>Units Remaining</th><th>Portfolio Value</th><th>Withdrawn</th><th>XIRR</th></tr>
+          <tr><th>Month</th><th>Date</th><th>NAV (Rs)</th><th>Units Redeemed</th><th>Units Remaining</th><th>Portfolio Value (Rs)</th><th>Withdrawn (Rs)</th><th>XIRR (%)</th></tr>
           ${tableRows}
         </table>
       </body>
@@ -1796,18 +1755,9 @@ document.getElementById('amcSearchApi').addEventListener('focus', () => {
     renderAmcSuggestions(lastAmcSuggestions);
   }
 });
-document.getElementById('amcSuggestions').addEventListener('click', (event) => {
-  const btn = event.target.closest('button[data-index]');
-  if (!btn) return;
-  const index = Number(btn.dataset.index);
-  if (Number.isInteger(index)) {
-    selectAmcSuggestionByIndex(index);
-  }
-});
 document.getElementById('amcSuggestions').addEventListener('pointerdown', (event) => {
-  // Prevent blur on input but allow scrolling
   if (event.target.classList.contains('suggestion-item')) {
-     // If it's a click, pointerup will handle it
+    event.preventDefault();
   }
 });
 document.getElementById('amcSearchApi').addEventListener('keydown', (event) => {
@@ -1834,16 +1784,7 @@ document.getElementById('fundSearchApi').addEventListener('focus', () => {
     searchFundsFromAPI();
   }
 });
-document.getElementById('fundSuggestions').addEventListener('click', (event) => {
-  const btn = event.target.closest('button[data-index]');
-  if (!btn) return;
-  const index = Number(btn.dataset.index);
-  if (Number.isInteger(index)) {
-    selectFundSuggestionByIndex(index);
-  }
-});
 document.getElementById('fundSuggestions').addEventListener('pointerdown', (event) => {
-  // Prevent blur on input
   event.preventDefault();
 });
 document.getElementById('fundSearchApi').addEventListener('keydown', (event) => {

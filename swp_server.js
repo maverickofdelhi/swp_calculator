@@ -924,16 +924,16 @@ function calculateSWP({ initialInvestment, investmentDate, swpStartDate, annualW
   // Sort NAV keys
   const navKeys = Object.keys(navData).sort();
 
-  // Get NAV on or just before a date
+  // Get NAV on or just before a date (binary search)
   function getNAV(dateStr) {
     if (navData[dateStr] !== undefined) return { date: dateStr, nav: navData[dateStr] };
-    let best = null;
-    for (const k of navKeys) {
-      if (k <= dateStr) best = k;
-      else break;
+    let lo = 0, hi = navKeys.length - 1, best = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (navKeys[mid] <= dateStr) { best = mid; lo = mid + 1; }
+      else hi = mid - 1;
     }
-    if (best) return { date: best, nav: navData[best] };
-    return null;
+    return best >= 0 ? { date: navKeys[best], nav: navData[navKeys[best]] } : null;
   }
 
   // NAV at investment date
@@ -1061,7 +1061,8 @@ function computeXIRR(cashflows, dates) {
     r = r - fr / dfr;
     if (r < -0.9999) r = -0.9999;
   }
-  return isNaN(r) || !isFinite(r) ? null : r;
+  if (isNaN(r) || !isFinite(r)) return null;
+  return Math.abs(npv(r)) < 1e-4 ? r : null;
 }
 
 async function calculateSWPFromScheme({ initialInvestment, investmentDate, swpStartDate, annualWithdrawalRate, schemeCode, navData: providedNavData, schemeName }) {

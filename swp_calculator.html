@@ -561,7 +561,7 @@
         <div id="amcSuggestions" class="search-suggestions hidden"></div>
       </div>
       <div class="field">
-        <label>Step 2: Select Fund (Direct/Regular Growth)</label>
+        <label>Step 2: Select Fund</label>
         <input type="text" id="fundSearchApi" placeholder="Select AMC first, then type fund name" autocomplete="off" disabled>
         <button type="button" class="clear-btn" id="clearFund" title="Clear">×</button>
         <div id="fundSuggestions" class="search-suggestions hidden"></div>
@@ -571,7 +571,7 @@
         <input type="number" id="schemeCode" placeholder="e.g. 100033" min="1" inputmode="numeric">
       </div>
     </div>
-    <div id="apiFundMeta" style="font-size: 0.74rem; color: var(--muted); margin-top: 10px;">Select AMC first, then pick a Direct/Regular Growth fund. History loads automatically.</div>
+    <div id="apiFundMeta" style="font-size: 0.74rem; color: var(--muted); margin-top: 10px;">Select AMC first, then pick a fund. History loads automatically.</div>
     <div id="dataRangeInfo" class="hidden" style="font-size: 0.72rem; margin-top: 4px; color: var(--muted); font-weight: 500;"></div>
 
     <div id="navLiveStatus" class="status-msg info">Choose a fund to auto-load live history.</div>
@@ -712,7 +712,7 @@ function selectAmcSuggestionByIndex(index) {
   fundInput.disabled = false;
   fundInput.placeholder = `Type fund under ${amc.amcName}`;
   clearFundSelectionForAmc();
-  document.getElementById('apiFundMeta').textContent = `AMC selected: ${amc.amcName}. Now choose a Direct/Regular Growth fund.`;
+  document.getElementById('apiFundMeta').textContent = `AMC selected: ${amc.amcName}. Now choose a Growth fund.`;
   hideAmcSuggestions();
   searchFundsFromAPI();
 }
@@ -1151,11 +1151,11 @@ async function fetchFundSinceInception(isAuto = false, forceReset = false) {
     }
     return;
   } catch (err) {
-    console.warn('Backend fetch failed, trying direct MFAPI:', err.message);
+    console.warn('Backend fetch failed, trying MFAPI fallback:', err.message);
     usedFallback = true;
   }
 
-  // Fallback: direct MFAPI (works when server offline)
+  // Fallback: MFAPI (works when server offline)
   if (usedFallback) {
     try {
       const fallbackUrl = `https://api.mfapi.in/mf/${code}`;
@@ -1170,16 +1170,16 @@ async function fetchFundSinceInception(isAuto = false, forceReset = false) {
         if (!isoDate || !isFinite(navValue) || navValue <= 0) continue;
         rebuilt[isoDate] = navValue;
       }
-      if (!Object.keys(rebuilt).length) throw new Error('Unable to parse direct MFAPI data.');
+      if (!Object.keys(rebuilt).length) throw new Error('Unable to parse MFAPI data.');
 
       const schemeName = (payload.meta && payload.meta.scheme_name) || requestedName;
       if (!schemeName) throw new Error(`Fund name unavailable for code ${code}. Please use the dropdown to select the fund.`);
-      const { allDates } = applyNavData(rebuilt, schemeName, 'Direct');
-      apiMeta.textContent = `${schemeName} (Code: ${code}) · ${allDates.length} pts · Direct MFAPI (server offline)`;
-      liveStatus.textContent = `${schemeName} — ${allDates.length} NAV points loaded via direct MFAPI.`;
+      const { allDates } = applyNavData(rebuilt, schemeName, 'MFAPI');
+      apiMeta.textContent = `${schemeName} (Code: ${code}) · ${allDates.length} pts · MFAPI (server offline)`;
+      liveStatus.textContent = `${schemeName} — ${allDates.length} NAV points loaded via MFAPI.`;
       return;
     } catch (fallbackErr) {
-      console.error('Direct MFAPI fallback also failed:', fallbackErr.message);
+      console.error('MFAPI fallback also failed:', fallbackErr.message);
     }
   }
 
